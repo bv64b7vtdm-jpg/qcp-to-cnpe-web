@@ -4,6 +4,12 @@
   "installCommand": "uv pip install --system -r requirements.txt",
   "outputDirectory": null,
   "devCommand": null,
+  "functions": {
+    "api/index.py": {
+      "runtime": "python3.12",
+      "handler": "api/index.handler"
+    }
+  },
   "routes": [
     {"src": "/(.*)", "dest": "/api/index"}
   ]
