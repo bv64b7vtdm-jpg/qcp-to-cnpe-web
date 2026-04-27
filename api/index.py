@@ -68,7 +68,7 @@ def upload():
             os.remove(pdf_path)
             return jsonify({'error': '未能从PDF中识别到QCP工序数据。请确认PDF为文本型（不是扫描件）。'}), 422
 
-        output_name = f"CNPE_转换_{item_code_19}.xlsx"
+        output_name = f"{item_code_19}_{part_no}_QCP导入数据.xlsx"
         output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_name)
         fill_template_surgical(output_path, steps, item_code_19, supplier_item_code)
         os.remove(pdf_path)
@@ -87,22 +87,52 @@ def upload():
 # ─── PDF 解析 ────────────────────────────────────────────────────────────
 
 STEP_RE = re.compile(r'^([A-Z]\d+(?:\.\d+)*\*?)$')
+# 二重装备格式步骤号：0, 1, 2, 6-1, B-1, B-5-a, B-12-1 等
+STEP_NUM_RE = re.compile(r'^(\d+[A-Z]?(?:-\d+)*|[A-Z]-\d+(?:-\d+)*|[A-Z]-\d+-[a-z])$')
 WHR_RE = re.compile(r'\b([WHR])\b')
 DOC_RE = re.compile(r'^([A-Z]{2,}\d+)')
 
 
-def extract_qcp_with_whr(pdf_path):
-    """从 QCP PDF 提取工序数据。
+def _is_valid_step(s):
+    if not s: return False
+    if s.isdigit(): return True
+    if re.match(r'^[A-Z]\d+(?:\.\d+)*\*?$', s): return True
+    if re.match(r'^\d+-\d+$', s): return True
+    if re.match(r'^[A-Z]-\d+(?:-\d+)*$', s): return True
+    if re.match(r'^[A-Z]-\d+-[a-z]$', s): return True
+    return False
 
-    19 列 QCP 表结构（三门泵装配 PDF）：
-      col 0  → 工序号
+
+def extract_qcp_with_whr(pdf_path):
+    """从 QCP PDF 提取工序数据。支持两种格式：
+
+    【SEC-KSB 19列格式】（三门泵装配 PDF）
+      col 0  → 工序号（如 A1, B1.1, E1.5）
       col 1  → 工序名称
       col 3  → 依据文件编号
       col 8  → S列选点（H/W/R）
+      col 11 → A列选点
       col 17 → 备注
+
+    【二重装备 24列格式】（泵壳底脚锻件 PDF）
+      col 0  → 工序号（如 0, 1, 6-1, B-1, B-5-a）
+      col 1  → 工序名称
+      col 4  → 依据文件编号
+      col 12 → A列选点
+      col 15 → S列选点（H/W/R）
+      col 22 → 备注
     """
     all_steps = []
     seen_keys = set()
+
+    SKIP_CELLS = {
+        '序号', 'No.', '工序名称', 'Process Name',
+        '报告编号', 'Remark', '备注', '版', 'Rev.',
+        'S', 'C', 'O', 'W', 'H', 'R',
+        '图号', 'Specification', '零件名称', 'Part Name',
+        'Part No.', '零件编号', '材质', 'Material',
+        'Pending', 'No report', '查', 'NA'
+    }
 
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
@@ -110,7 +140,14 @@ def extract_qcp_with_whr(pdf_path):
             for table in tables:
                 if len(table) == 0:
                     continue
-                if len(table[0]) not in (18, 19, 20):
+                n_cols = len(table[0])
+
+                # 判断格式：19列=SEC-KSB，24列=二重装备
+                if n_cols >= 20:
+                    fmt = 24  # 二重装备
+                elif n_cols >= 18:
+                    fmt = 19  # SEC-KSB
+                else:
                     continue
 
                 for row in table:
@@ -119,74 +156,103 @@ def extract_qcp_with_whr(pdf_path):
                     cells = [str(c).strip() if c else '' for c in row]
 
                     for idx, cell in enumerate(cells):
-                        m = STEP_RE.match(cell)
-                        if not m:
+                        # 工序号只允许在前5列（col 0~4），避免误识表头单元格
+                        if idx > 4:
                             continue
-                        step_num = m.group(1).rstrip('*')
-                        inner = step_num.lstrip('ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+
+                        step_num_raw = cell.strip()
+                        if not _is_valid_step(step_num_raw):
+                            continue
+
+                        step_num = step_num_raw
+                        inner = step_num.lstrip('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-')
                         if inner.startswith(('20', '19')):
                             continue
 
-                        # S列选点（col 8）
-                        s_col_idx = idx + 8
-                        whr_s = ''
-                        if s_col_idx < len(cells):
-                            raw = cells[s_col_idx].replace('点', '').strip()
-                            if raw in ('W', 'H', 'R'):
-                                whr_s = raw + '点'
-
-                        # col 11 = A列选点
-                        a_col_idx = idx + 11
-                        whr_a = ''
-                        if a_col_idx < len(cells):
-                            raw = cells[a_col_idx].replace('点', '').strip()
-                            if raw in ('W', 'H', 'R'):
-                                whr_a = raw + '点'
-
-                        # 名称
+                        # ── 名称 ──────────────────────────
                         name = ''
-                        for offset in range(1, len(cells)):
-                            nc = cells[idx + offset]
-                            if not nc or nc in (
-                                '序号', 'No.', '工序名称', 'Process Name',
-                                '报告编号', 'Remark', '备注', '版', 'Rev.',
-                                'S', 'C', 'O', 'W', 'H', 'R',
-                                '图号', 'Specification', '零件名称', 'Part Name',
-                                'Part No.', '零件编号', '材质', 'Material',
-                                'Pending', 'No report', '查', 'NA'
-                            ):
+                        for offset in range(1, min(len(cells), 25)):
+                            nc = cells[idx + offset] if idx + offset < len(cells) else ''
+                            if not nc or nc in SKIP_CELLS:
                                 continue
                             if re.match(r'^\d{2,4}[-./]', nc):
                                 continue
                             name = nc.split('\n')[0].strip()
                             break
-
+                        # 过滤无效名称：日期、PRE、仅大写字母等
                         if not name or name == step_num:
+                            continue
+                        if name in ('PRE', 'N/A', 'NA', 'Pending'):
+                            continue
+                        # 日期格式（如 2024-08-30）
+                        if re.match(r'^\d{4}[-/]\d{2}[-/]\d{2}$', name):
                             continue
 
                         # BOM 过滤
-                        if '.' not in step_num:
+                        if '.' not in step_num and '-' not in step_num:
                             if re.search(r'\d', name):
                                 break
-                            # A1 类保留
 
-                        # 依据文件编号（col 3）
-                        doc_no = ''
-                        doc_col_idx = idx + 3
-                        if doc_col_idx < len(cells):
-                            raw = cells[doc_col_idx].strip()
-                            if DOC_RE.match(raw):
-                                doc_no = raw.split('\n')[0].strip()
-
-                        # 备注（col 17）
-                        remark = ''
-                        rem_col_idx = idx + 17
-                        if rem_col_idx < len(cells):
-                            raw = cells[rem_col_idx].strip()
-                            if raw == 'No report':
-                                remark = 'No report'
-                            elif raw and raw not in ('No report', 'NA', '查'):
-                                remark = raw.split('\n')[0].strip()
+                        # ── WHR 提取 ──────────────────────
+                        if fmt == 24:
+                            # 二重装备：col 15=S列
+                            s_idx = idx + 15
+                            whr_s = ''
+                            if s_idx < len(cells):
+                                raw = cells[s_idx].replace('点', '').strip()
+                                if raw in ('W', 'H', 'R'):
+                                    whr_s = raw + '点'
+                            # col 12=A列
+                            a_idx = idx + 12
+                            whr_a = ''
+                            if a_idx < len(cells):
+                                raw = cells[a_idx].replace('点', '').strip()
+                                if raw in ('W', 'H', 'R'):
+                                    whr_a = raw + '点'
+                            # col 4=文件编号
+                            doc_no = ''
+                            doc_idx = idx + 4
+                            if doc_idx < len(cells):
+                                raw = cells[doc_idx].strip()
+                                if DOC_RE.match(raw):
+                                    doc_no = raw.split('\n')[0].strip()
+                            # col 22=备注
+                            remark = ''
+                            rem_idx = idx + 22
+                            if rem_idx < len(cells):
+                                raw = cells[rem_idx].strip()
+                                if raw == 'No report':
+                                    remark = 'No report'
+                                elif raw and raw not in ('No report', 'NA', '查'):
+                                    remark = raw.split('\n')[0].strip()
+                        else:
+                            # SEC-KSB：col 8=S列，col 11=A列，col 3=文件，col 17=备注
+                            s_idx = idx + 8
+                            whr_s = ''
+                            if s_idx < len(cells):
+                                raw = cells[s_idx].replace('点', '').strip()
+                                if raw in ('W', 'H', 'R'):
+                                    whr_s = raw + '点'
+                            a_idx = idx + 11
+                            whr_a = ''
+                            if a_idx < len(cells):
+                                raw = cells[a_idx].replace('点', '').strip()
+                                if raw in ('W', 'H', 'R'):
+                                    whr_a = raw + '点'
+                            doc_no = ''
+                            doc_idx = idx + 3
+                            if doc_idx < len(cells):
+                                raw = cells[doc_idx].strip()
+                                if DOC_RE.match(raw):
+                                    doc_no = raw.split('\n')[0].strip()
+                            remark = ''
+                            rem_idx = idx + 17
+                            if rem_idx < len(cells):
+                                raw = cells[rem_idx].strip()
+                                if raw == 'No report':
+                                    remark = 'No report'
+                                elif raw and raw not in ('No report', 'NA', '查'):
+                                    remark = raw.split('\n')[0].strip()
 
                         key = f"{step_num}|{name}"
                         if key not in seen_keys:
@@ -202,10 +268,16 @@ def extract_qcp_with_whr(pdf_path):
                         break
 
     def sort_key(s):
-        m = re.match(r'^([A-Z])(\d+(?:\.\d+)*)', s['step'])
+        num = s['step']
+        # 统一排序：数字部分 + 字母前缀
+        m = re.match(r'^([A-Z]?)(-?)(\d+)(.*)$', num)
         if m:
-            return (m.group(1), [int(x) for x in m.group(2).split('.')])
-        return (s['step'], [])
+            prefix = m.group(1) or ''
+            dash = m.group(2) or ''
+            nums = [int(x) for x in m.group(3).split('.')]
+            suffix = m.group(4) or ''
+            return (prefix, dash, nums, suffix)
+        return (num, '', [], '')
 
     all_steps.sort(key=sort_key)
     return all_steps
@@ -353,9 +425,10 @@ def fill_template_surgical(output_path, steps, item_code_19, supplier_item_code)
         # I列（工序名称）
         cells_xml += f'<c r="I{rnum}" t="s"><v>{str_map[s["name"]]}</v></c>'
 
-        # K列（选点S）
+        # K列（选点S）和 X列（CNPE选点）均填 S列 WHR 值
         if s['whr_s']:
             cells_xml += f'<c r="K{rnum}" t="s"><v>{str_map[s["whr_s"]]}</v></c>'
+            cells_xml += f'<c r="X{rnum}" t="s"><v>{str_map[s["whr_s"]]}</v></c>'
 
         # M列（依据文件编号）
         if s['doc_no']:
