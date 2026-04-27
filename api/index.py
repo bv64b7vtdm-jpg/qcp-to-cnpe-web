@@ -209,6 +209,13 @@ def extract_qcp_with_whr(pdf_path):
                                 raw = cells[a_idx].replace('点', '').strip()
                                 if raw in ('W', 'H', 'R'):
                                     whr_a = raw + '点'
+                            # col 17=C列
+                            c_idx = idx + 17
+                            whr_c = ''
+                            if c_idx < len(cells):
+                                raw = cells[c_idx].replace('点', '').strip()
+                                if raw in ('W', 'H', 'R'):
+                                    whr_c = raw + '点'
                             # col 4=文件编号
                             doc_no = ''
                             doc_idx = idx + 4
@@ -239,6 +246,13 @@ def extract_qcp_with_whr(pdf_path):
                                 raw = cells[a_idx].replace('点', '').strip()
                                 if raw in ('W', 'H', 'R'):
                                     whr_a = raw + '点'
+                            # col 11=C列（SEC-KSB 19列格式）
+                            c_idx = idx + 11
+                            whr_c = ''
+                            if c_idx < len(cells):
+                                raw = cells[c_idx].replace('点', '').strip()
+                                if raw in ('W', 'H', 'R'):
+                                    whr_c = raw + '点'
                             doc_no = ''
                             doc_idx = idx + 3
                             if doc_idx < len(cells):
@@ -262,6 +276,7 @@ def extract_qcp_with_whr(pdf_path):
                                 'name': name,
                                 'whr_s': whr_s,
                                 'whr_a': whr_a,
+                                'whr_c': whr_c,
                                 'doc_no': doc_no,
                                 'remark': remark,
                             })
@@ -359,6 +374,7 @@ def fill_template_surgical(output_path, steps, item_code_19, supplier_item_code)
             get_idx(s['whr_s'])
         if s['whr_a']:
             get_idx(s['whr_a'])
+            get_idx(s.get('whr_c'))
         if s['doc_no']:
             get_idx(s['doc_no'])
         if s['remark']:
@@ -425,10 +441,12 @@ def fill_template_surgical(output_path, steps, item_code_19, supplier_item_code)
         # I列（工序名称）
         cells_xml += f'<c r="I{rnum}" t="s"><v>{str_map[s["name"]]}</v></c>'
 
-        # K列（选点S）和 X列（CNPE选点）均填 S列 WHR 值
+        # K列（选点S）填 S列 WHR 值
         if s['whr_s']:
             cells_xml += f'<c r="K{rnum}" t="s"><v>{str_map[s["whr_s"]]}</v></c>'
-            cells_xml += f'<c r="X{rnum}" t="s"><v>{str_map[s["whr_s"]]}</v></c>'
+        # X列（CNPE选点）填 C列 WHR 值
+        if s.get('whr_c'):
+            cells_xml += f'<c r="X{rnum}" t="s"><v>{str_map[s["whr_c"]]}</v></c>'
 
         # M列（依据文件编号）
         if s['doc_no']:
