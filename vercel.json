@@ -1,13 +1,5 @@
 {
-  "framework": null,
-  "buildCommand": null,
+  "buildCommand": "echo 'no build'",
   "installCommand": "uv pip install --system -r requirements.txt",
-  "outputDirectory": null,
-  "devCommand": null,
-  "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "/api/index"
-    }
-  ]
+  "outputDirectory": "public"
 }
