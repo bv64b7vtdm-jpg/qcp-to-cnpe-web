@@ -1,8 +1,8 @@
 {
   "framework": null,
-  "buildCommand": null,
+  "buildCommand": "mkdir public && touch public/.gitkeep",
   "installCommand": "uv pip install --system -r requirements.txt",
-  "outputDirectory": null,
+  "outputDirectory": "public",
   "rewrites": [
     {"source": "/(.*)", "destination": "/api/index"}
   ]
