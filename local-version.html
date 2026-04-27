@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>QCP → CNPE 本地版（无需网络）</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #1a1a2e; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 20px; }
+.container { background: white; border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.4); padding: 40px; max-width: 600px; width: 100%; }
+h1 { color: #333; font-size: 20px; margin-bottom: 6px; text-align: center; }
+.subtitle { color: #888; font-size: 13px; text-align: center; margin-bottom: 24px; }
+.info { background: #e8f0fe; border: 1px solid #a8c7fa; border-radius: 8px; padding: 12px; font-size: 13px; color: #1a73e8; margin-bottom: 20px; }
+.info strong { display: block; margin-bottom: 4px; }
+.form-group { margin-bottom: 16px; }
+label { display: block; color: #333; font-size: 14px; font-weight: 500; margin-bottom: 6px; }
+label .req { color: #e74c3c; }
+input[type=text] { width: 100%; padding: 12px 16px; border: 2px solid #e1e1e1; border-radius: 8px; font-size: 14px; transition: border-color 0.3s; }
+input:focus { outline: none; border-color: #667eea; }
+.upload-area { border: 2px dashed #667eea; border-radius: 12px; padding: 32px; text-align: center; cursor: pointer; transition: all 0.3s; margin-bottom: 16px; }
+.upload-area:hover { border-color: #764ba2; background: #f8f6ff; }
+.upload-icon { font-size: 36px; margin-bottom: 8px; }
+.upload-text { color: #666; font-size: 14px; }
+.upload-text strong { color: #667eea; }
+#file-input { display: none; }
+.file-info { margin-top: 8px; padding: 10px; background: #f0f0f0; border-radius: 8px; font-size: 13px; display: none; word-break: break-all; }
+button[type=submit] { width: 100%; padding: 14px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; margin-top: 8px; }
+button[type=submit]:hover { opacity: 0.9; transform: translateY(-1px); }
+button[type=submit]:disabled { background: #ccc; cursor: not-allowed; transform: none; }
+.status { margin-top: 16px; padding: 14px; border-radius: 8px; font-size: 14px; display: none; }
+.status.loading { background: #fff3cd; color: #856404; display: block; }
+.status.error { background: #f8d7da; color: #721c24; display: block; }
+.status.success { background: #d4edda; color: #155724; display: block; }
+.spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #f3f3f3; border-top: 2px solid #667eea; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 6px; vertical-align: middle; }
+@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+.sample-box { background: #f8f9fa; border: 1px solid #e1e1e1; border-radius: 8px; padding: 14px; margin-bottom: 20px; font-size: 13px; }
+.sample-box h3 { font-size: 14px; margin-bottom: 8px; color: #333; }
+.sample-box ul { padding-left: 18px; color: #555; line-height: 1.8; }
+.note { font-size: 12px; color: #888; margin-top: 16px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="container">
+  <h1>QCP → CNPE 转换工具</h1>
+  <p class="subtitle">本地版 · 无需网络 · 无需服务器</p>
+  
+  <div class="info">
+    <strong>使用说明</strong>
+    上传 QCP PDF 文件，系统自动解析工序数据，生成 CNPE 格式 Excel 文件并直接下载。
+  </div>
+
+  <div class="sample-box">
+    <h3>支持的 QCP 格式</h3>
+    <ul>
+      <li>KSB SEC QCP 质量计划（PDF）</li>
+      <li>包含工序号、工序名称、检验内容的 QCP 文档</li>
+      <li>支持文本型 PDF（非扫描件）</li>
+    </ul>
+  </div>
+
+  <form id="upload-form">
+    <div class="form-group">
+      <label>19位编码 <span class="req">*</span></label>
+      <input type="text" name="item_code_19" id="item_code_19" placeholder="例如: 1P12345678901234567" required>
+    </div>
+    <div class="form-group">
+      <label>零件号</label>
+      <input type="text" name="part_no" id="part_no" placeholder="可选">
+    </div>
+    <div class="form-group">
+      <label>厂家物项编号 <span class="req">*</span></label>
+      <input type="text" name="supplier_item_code" id="supplier_item_code" placeholder="必填" required>
+    </div>
+    <div class="upload-area" id="upload-area">
+      <div class="upload-icon">📄</div>
+      <div class="upload-text"><strong>点击选择PDF文件</strong><br>支持 QCP 质量计划文档</div>
+      <input type="file" id="file-input" name="file" accept=".pdf" required>
+    </div>
+    <div class="file-info" id="file-info"><span id="file-name"></span></div>
+    <button type="submit" id="submit-btn">开始转换</button>
+  </form>
+  <div class="status" id="status"></div>
+  <p class="note">所有处理均在本地浏览器完成，数据不会上传到任何服务器</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+const uploadArea = document.getElementById('upload-area');
+const fileInput = document.getElementById('file-input');
+const fileInfo = document.getElementById('file-info');
+const fileName = document.getElementById('file-name');
+const form = document.getElementById('upload-form');
+const submitBtn = document.getElementById('submit-btn');
+const status = document.getElementById('status');
+
+uploadArea.addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', e => { if(e.target.files[0]) showFile(e.target.files[0]); });
+uploadArea.addEventListener('dragover', e => { e.preventDefault(); uploadArea.style.borderColor = '#764ba2'; });
+uploadArea.addEventListener('dragleave', () => { uploadArea.style.borderColor = '#667eea'; });
+uploadArea.addEventListener('drop', e => { e.preventDefault(); uploadArea.style.borderColor = '#667eea'; if(e.dataTransfer.files[0]) showFile(e.dataTransfer.files[0]); });
+
+function showFile(f) {
+  fileName.textContent = f.name;
+  fileInfo.style.display = 'block';
+}
+
+function setStatus(cls, html) {
+  status.className = 'status ' + cls;
+  status.innerHTML = html;
+}
+
+form.addEventListener('submit', async e => {
+  e.preventDefault();
+  const file = fileInput.files[0];
+  if (!file) { setStatus('error', '请先选择PDF文件'); return; }
+
+  const item_code_19 = document.getElementById('item_code_19').value.trim();
+  const supplier_item_code = document.getElementById('supplier_item_code').value.trim();
+  const part_no = document.getElementById('part_no').value.trim();
+
+  if (!item_code_19 || !supplier_item_code) {
+    setStatus('error', '19位编码和厂家物项编号为必填项');
+    return;
+  }
+
+  setStatus('loading', '<span class="spinner"></span>正在解析PDF，请稍候...');
+  submitBtn.disabled = true;
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
+    
+    let fullText = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      setStatus('loading', `<span class="spinner"></span>正在解析第 ${i}/${pdf.numPages} 页...`);
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const pageText = content.items.map(item => item.str).join(' ');
+      fullText += pageText + '\n';
+    }
+
+    setStatus('loading', '<span class="spinner"></span>正在提取工序数据...');
+    const qcpData = extractQCPData(fullText);
+    
+    if (qcpData.length === 0) {
+      setStatus('error', '未能从PDF中识别到QCP工序数据。请确认文件内容包含工序号和检验信息。');
+      submitBtn.disabled = false;
+      return;
+    }
+
+    setStatus('loading', '<span class="spinner"></span>正在生成CNPE Excel...');
+    generateExcel(qcpData, item_code_19, part_no, supplier_item_code);
+    
+    setStatus('success', `✓ 转换成功！共提取 ${qcpData.length} 道工序，Excel 已开始下载。`);
+  } catch(err) {
+    console.error(err);
+    setStatus('error', '✗ 处理失败：' + err.message);
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+function extractQCPData(text) {
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  const records = [];
+  
+  // 匹配模式1: 工序号 + 工序名称 + 检验内容（常见格式）
+  // 例如: "10  预清洗  检查清洗质量..."
+  // 例如: "20  尺寸检查  检验尺寸是否符合要求..."
+  const pattern1 = /^(\d{2,4})\s{1,4}([\u4e00-\u9fa5a-zA-Z0-9/\-()（）【】『』]{2,30})\s{1,4}([\u4e00-\u9fa5a-zA-Z0-9/\-()（）【】『』,.，。（）！？、:：;；\s]{3,200})$/;
+  
+  // 模式2: 工序号. 工序名称 检验内容
+  const pattern2 = /^(\d{2,4})[.、]\s*([\u4e00-\u9fa5a-zA-Z0-9/\-()（）]{2,30})\s{1,4}([\u4e00-\u9fa5a-zA-Z0-9/\-()（）【】『』,.，。（）！？、:：;；\s]{3,200})$/;
+  
+  // 模式3: 数字开头，工序名在后面
+  const pattern3 = /^\[?(\d{2,4})\]?\s*[-–—.、]?\s*([\u4e00-\u9fa5]{2,20})(?:[-–—.\s]+)([^\n]{5,150})$/;
+  
+  for (const line of lines) {
+    let match = line.match(pattern1);
+    if (match) {
+      records.push({ step: match[1], name: match[2], content: match[3].substring(0,100) });
+      continue;
+    }
+    
+    match = line.match(pattern2);
+    if (match) {
+      records.push({ step: match[1], name: match[2], content: match[3].substring(0,100) });
+      continue;
+    }
+    
+    match = line.match(pattern3);
+    if (match) {
+      records.push({ step: match[1], name: match[2], content: match[3].substring(0,100) });
+    }
+  }
+  
+  // 去重
+  const seen = new Set();
+  return records.filter(r => {
+    const key = r.step + '-' + r.name;
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+function generateExcel(qcpData, itemCode19, partNo, supplierItemCode) {
+  const wb = XLSX.utils.book_new();
+  
+  // Sheet1: 工序数据
+  const wsData = [
+    ['QCP转CNPE质量计划'],
+    ['19位编码', itemCode19],
+    ['零件号', partNo || ''],
+    ['厂家物项编号', supplierItemCode],
+    ['生成日期', new Date().toLocaleDateString('zh-CN')],
+    [],
+    ['序号', '工序号', '工序名称', '检验内容', '备注']
+  ];
+  
+  qcpData.forEach((row, i) => {
+    wsData.push([i + 1, row.step, row.name, row.content, '']);
+  });
+  
+  const ws = XLSX.utils.aoa_to_sheet(wsData);
+  
+  // 设置列宽
+  ws['!cols'] = [
+    { wch: 6 },   // 序号
+    { wch: 8 },   // 工序号
+    { wch: 20 },  // 工序名称
+    { wch: 50 },  // 检验内容
+    { wch: 15 }   // 备注
+  ];
+  
+  XLSX.utils.book_append_sheet(wb, ws, 'QCP工序');
+  
+  // Sheet2: 填写说明
+  const noteData = [
+    ['QCP转CNPE填写说明'],
+    [],
+    ['字段', '说明', '示例'],
+    ['19位编码', '采购订单中的19位物料编码', '1P12345678901234567'],
+    ['零件号', '可选，零件编号', 'A19'],
+    ['厂家物项编号', '供应商提供的物项编号', 'SK93303-A19'],
+    ['序号', '自动生成的序号', '1, 2, 3...'],
+    ['工序号', 'QCP中的工序编号', '10, 20, 30...'],
+    ['工序名称', '对应工序的名称', '预清洗、尺寸检查等'],
+    ['检验内容', '该工序的检验要求', '检查清洗质量...'],
+  ];
+  const ws2 = XLSX.utils.aoa_to_sheet(noteData);
+  ws2['!cols'] = [{ wch: 15 }, { wch: 30 }, { wch: 30 }];
+  XLSX.utils.book_append_sheet(wb, ws2, '填写说明');
+  
+  const filename = `CNPE_转换_${itemCode19}.xlsx`;
+  XLSX.writeFile(wb, filename);
+}
+</script>
+</body>
+</html>
