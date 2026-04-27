@@ -303,7 +303,7 @@ def q_val(step):
     1. 先决条件检查 / 计划关闭 → N
     2. 备注含 'No report' → N
     3. K列（S列）或R列（A列）有选点（H点/W点/R点）→ Y
-    4. 其他 → N
+    4. K列和R列都无选点时 → N
     """
     n = step['name']
     if '先决条件检查' in n or '计划关闭' in n:
