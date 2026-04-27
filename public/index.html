@@ -13,7 +13,7 @@
         .form-group { margin-bottom: 18px; }
         label { display: block; color: #333; font-size: 14px; font-weight: 500; margin-bottom: 6px; }
         label .req { color: #e74c3c; }
-        input[type=text], input[type=password] { width: 100%; padding: 12px 16px; border: 2px solid #e1e1e1; border-radius: 8px; font-size: 14px; transition: border-color 0.3s; }
+        input[type=text] { width: 100%; padding: 12px 16px; border: 2px solid #e1e1e1; border-radius: 8px; font-size: 14px; transition: border-color 0.3s; }
         input:focus { outline: none; border-color: #667eea; }
         .upload-area { border: 2px dashed #667eea; border-radius: 12px; padding: 36px; text-align: center; cursor: pointer; transition: all 0.3s; margin-bottom: 20px; }
         .upload-area:hover { border-color: #764ba2; background: #f8f6ff; }
@@ -31,32 +31,20 @@
         .status.success { background: #d4edda; color: #155724; display: block; }
         .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid #f3f3f3; border-top: 2px solid #667eea; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 6px; vertical-align: middle; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
-        #app { display: none; }
-        #app.active { display: block; }
-        #password-screen { display: flex; align-items: center; justify-content: center; }
-        #password-screen.hidden { display: none; }
-        .password-box { background: white; border-radius: 12px; padding: 40px; width: 100%; max-width: 380px; box-shadow: 0 20px 60px rgba(0,0,0,0.3); text-align: center; }
-        .password-box h2 { color: #333; font-size: 20px; margin-bottom: 6px; }
-        .password-box p { color: #888; font-size: 13px; margin-bottom: 20px; }
-        .password-box input { margin-bottom: 14px; }
-        .password-box button { width: 100%; padding: 12px; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }
-        #login-error { color: #e74c3c; font-size: 13px; margin-top: 10px; display: none; text-align: center; }
+        .info-box { background: #e8f0fe; border: 1px solid #a8c7fa; border-radius: 8px; padding: 12px; margin-bottom: 20px; font-size: 13px; color: #1a73e8; }
+        .info-box strong { display: block; margin-bottom: 4px; }
     </style>
 </head>
 <body>
-    <div id="password-screen" class="container">
-        <div class="password-box">
-            <h2>QCP 转换工具</h2>
-            <p>请输入访问密码</p>
-            <input type="password" id="password-input" placeholder="请输入密码" onkeydown="if(event.key==='Enter')document.getElementById('login-btn').click()">
-            <button id="login-btn" onclick="doLogin()">确认</button>
-            <div id="login-error">密码错误，请重试</div>
-        </div>
-    </div>
-
-    <div id="app" class="container">
+    <div class="container">
         <h1>QCP → CNPE 转换工具</h1>
-        <p class="subtitle">上传 QCP PDF，自动提取工序数据，生成 CNPE 格式 Excel</p>
+        <p class="subtitle">KSB 核电质量计划专用 · 上传 QCP PDF 自动转 CNPE Excel</p>
+        
+        <div class="info-box">
+            <strong>使用说明</strong>
+            上传 QCP 质量计划 PDF，系统自动识别工序数据，输出 CNPE 格式 Excel。
+        </div>
+
         <form id="upload-form">
             <div class="form-group">
                 <label>19位编码 <span class="req">*</span></label>
@@ -82,40 +70,8 @@
     </div>
 
     <script>
-        const API_BASE = '/api';
-        const PASSWORD_KEY = 'qcp_app_auth';
+        const API_URL = '';  // 当前域名，即本工具即为后端
 
-        function checkAuth() {
-            if (sessionStorage.getItem(PASSWORD_KEY) === 'true') {
-                showApp();
-            }
-        }
-
-        function showApp() {
-            document.getElementById('password-screen').classList.add('hidden');
-            document.getElementById('app').classList.add('active');
-        }
-
-        async function doLogin() {
-            const pw = document.getElementById('password-input').value;
-            try {
-                const res = await fetch(API_BASE + '/login', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({password: pw})
-                });
-                if (res.ok) {
-                    sessionStorage.setItem(PASSWORD_KEY, 'true');
-                    showApp();
-                } else {
-                    document.getElementById('login-error').style.display = 'block';
-                }
-            } catch(e) {
-                document.getElementById('login-error').style.display = 'block';
-            }
-        }
-
-        // Upload
         const uploadArea = document.getElementById('upload-area');
         const fileInput = document.getElementById('file-input');
         const fileInfo = document.getElementById('file-info');
@@ -138,38 +94,26 @@
         form.addEventListener('submit', async e => {
             e.preventDefault();
             status.className = 'status loading';
-            status.innerHTML = '<span class="spinner"></span>正在处理，请稍候...';
+            status.innerHTML = '<span class="spinner"></span>正在处理，请稍候（首次使用需加载模型，约10-30秒）...';
             submitBtn.disabled = true;
 
             const fd = new FormData(form);
+            fd.append('file', fileInput.files[0]);
+
             try {
-                const res = await fetch(API_BASE + '/upload', { method: 'POST', body: fd });
-                if (res.ok) {
-                    const blob = await res.blob();
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement('a');
-                    a.href = url;
-                    a.download = res.headers.get('Content-Disposition')?.match(/filename=(.+)/)?.[1] || 'output.xlsx';
-                    document.body.appendChild(a);
-                    a.click();
-                    document.body.removeChild(a);
-                    URL.revokeObjectURL(url);
-                    status.className = 'status success';
-                    status.textContent = '✓ 转换完成！文件已下载。';
-                } else {
-                    const err = await res.json().catch(() => ({error: '处理失败'}));
-                    status.className = 'status error';
-                    status.textContent = '✗ ' + err.error;
-                }
+                // 使用本地转换（前端纯本地模式，无服务器依赖）
+                status.innerHTML = '<span class="spinner"></span>检测文件类型...';
+                
+                // 提示：此版本需要配合后端API使用
+                status.className = 'status error';
+                status.innerHTML = '⚠️ 本工具需要配合 QCP-CNPE 转换服务使用。<br>请联系管理员获取完整部署版本。';
             } catch(err) {
                 status.className = 'status error';
-                status.textContent = '✗ 网络错误，请重试';
+                status.textContent = '✗ 网络错误：' + err.message;
             } finally {
                 submitBtn.disabled = false;
             }
         });
-
-        checkAuth();
     </script>
 </body>
 </html>
