@@ -1,0 +1,10 @@
+{
+  "framework": null,
+  "buildCommand": "echo 'No build needed'",
+  "installCommand": "uv pip install --system -r requirements.txt",
+  "outputDirectory": null,
+  "devCommand": null,
+  "rewrites": [
+    {"source": "/(.*)", "destination": "/api/index"}
+  ]
+}
