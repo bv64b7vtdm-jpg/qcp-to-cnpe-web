@@ -1,37 +1,23 @@
 """
 Flask web app for QCP to CNPE conversion.
-Vercel serverless - api/index.py IS the entry point.
 """
 
 import os
 import uuid
-import sys
 from flask import Flask, request, render_template, send_file, jsonify, session
 from functools import wraps
 from werkzeug.utils import secure_filename
 
-# Vercel serverless path setup
-VERCEL_APP_DIR = os.environ.get('VERCEL_APP_DIR', os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-sys.path.insert(0, VERCEL_APP_DIR)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 app = Flask(__name__,
-            template_folder=os.path.join(VERCEL_APP_DIR, 'templates'),
-            static_folder=os.path.join(VERCEL_APP_DIR, 'static'))
+            template_folder=os.path.join(BASE_DIR, 'templates'),
+            static_folder=os.path.join(BASE_DIR, 'static'))
 app.secret_key = os.environ.get('SECRET_KEY', 'qcp-cnpe-secret-key-2026')
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 app.config['UPLOAD_FOLDER'] = '/tmp/qcp-uploads'
 
-APP_PASSWORD = os.environ.get('QCP_PASSWORD', 'KSB2026')
 ALLOWED_EXTENSIONS = {'pdf'}
-
-
-def password_required(f):
-    @wraps(f)
-    def decorated_function(*args, **kwargs):
-        if session.get('authenticated') != True:
-            return jsonify({'error': '请先通过密码验证'}), 401
-        return f(*args, **kwargs)
-    return decorated_function
 
 
 def allowed_file(filename):
@@ -40,28 +26,17 @@ def allowed_file(filename):
 
 @app.route('/')
 def index():
-    try:
-        if session.get('authenticated'):
-            return render_template('index.html', authenticated=True)
-        return render_template('index.html', authenticated=False)
-    except Exception as e:
-        return f"Template error: {str(e)}", 500
+    return render_template('index.html')
 
 
 @app.route('/login', methods=['POST'])
 def login():
-    try:
-        data = request.get_json()
-        if data.get('password') == APP_PASSWORD:
-            session['authenticated'] = True
-            return jsonify({'status': 'ok'})
-        return jsonify({'error': '密码错误'}), 401
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    # No password for now - just allow login
+    session['authenticated'] = True
+    return jsonify({'status': 'ok'})
 
 
 @app.route('/upload', methods=['POST'])
-@password_required
 def upload():
     try:
         item_code_19 = request.form.get('item_code_19', '').strip()
@@ -90,7 +65,7 @@ def upload():
             return jsonify({'error': '未能从PDF提取工序数据'}), 422
 
         output_path = os.path.join(app.config['UPLOAD_FOLDER'], f"CNPE_转换_{item_code_19}.xlsx")
-        template_path = os.path.join(VERCEL_APP_DIR, 'templates', 'CNPE_质量计划导入Excel模板.xlsx')
+        template_path = os.path.join(BASE_DIR, 'templates', 'CNPE_质量计划导入Excel模板.xlsx')
 
         if not os.path.exists(template_path):
             os.remove(pdf_path)
@@ -113,8 +88,7 @@ def upload():
 
 @app.route('/health')
 def health():
-    return jsonify({'status': 'ok', 'dir': VERCEL_APP_DIR})
+    return jsonify({'status': 'ok'})
 
 
-# Vercel serverless handler
 handler = app
