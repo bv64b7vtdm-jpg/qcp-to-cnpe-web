@@ -1,6 +1,6 @@
 """
 Flask web application for QCP to CNPE Excel conversion.
-Vercel serverless compatible version.
+Vercel serverless version.
 """
 
 import os
@@ -10,8 +10,12 @@ from flask import Flask, request, render_template, send_file, jsonify, session
 from functools import wraps
 from werkzeug.utils import secure_filename
 
-# Fix template path for Vercel
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+# Determine base directory - works in both local and Vercel serverless
+VERCEL_APP_DIR = os.environ.get('VERCEL_APP_DIR', '')
+if VERCEL_APP_DIR:
+    BASE_DIR = VERCEL_APP_DIR
+else:
+    BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 app = Flask(__name__,
             template_folder=os.path.join(BASE_DIR, 'templates'),
@@ -40,19 +44,25 @@ def allowed_file(filename):
 
 @app.route('/')
 def index():
-    if session.get('authenticated'):
-        return render_template('index.html', authenticated=True)
-    return render_template('index.html', authenticated=False)
+    try:
+        if session.get('authenticated'):
+            return render_template('index.html', authenticated=True)
+        return render_template('index.html', authenticated=False)
+    except Exception as e:
+        return f"Template error: {str(e)}", 500
 
 
 @app.route('/login', methods=['POST'])
 def login():
-    data = request.get_json()
-    password = data.get('password', '')
-    if password == APP_PASSWORD:
-        session['authenticated'] = True
-        return jsonify({'status': 'ok'})
-    return jsonify({'error': '密码错误'}), 401
+    try:
+        data = request.get_json()
+        password = data.get('password', '')
+        if password == APP_PASSWORD:
+            session['authenticated'] = True
+            return jsonify({'status': 'ok'})
+        return jsonify({'error': '密码错误'}), 401
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 
 @app.route('/upload', methods=['POST'])
@@ -78,10 +88,11 @@ def upload():
         if not allowed_file(file.filename):
             return jsonify({'error': '只支持PDF格式文件'}), 400
 
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
         filename = secure_filename(file.filename)
         unique_filename = f"{uuid.uuid4().hex}_{filename}"
         pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
-        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
         file.save(pdf_path)
 
         from utils.pdf_parser import detect_pdf_type, extract_qcp_data
@@ -102,7 +113,7 @@ def upload():
 
         if not os.path.exists(template_path):
             os.remove(pdf_path)
-            return jsonify({'error': 'Excel模板文件不存在'}), 500
+            return jsonify({'error': f'Excel模板文件不存在: {template_path}'}), 500
 
         from utils.excel_filler import fill_cnpe_template
         fill_cnpe_template(
@@ -124,12 +135,14 @@ def upload():
         )
 
     except Exception as e:
-        print(f"Error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({'error': f'处理失败: {str(e)}'}), 500
 
 
 @app.route('/health', methods=['GET'])
 def health():
-    return jsonify({'status': 'ok'})
+    return jsonify({'status': 'ok', 'base_dir': BASE_DIR})
+
 
 handler = app
