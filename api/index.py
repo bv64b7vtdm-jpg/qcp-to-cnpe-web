@@ -131,3 +131,5 @@ def upload():
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok'})
+
+handler = app
