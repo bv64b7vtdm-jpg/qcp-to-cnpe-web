@@ -1,5 +1,5 @@
 {
-  "buildCommand": "echo 'no build'",
+  "buildCommand": "echo 'done'",
   "installCommand": "uv pip install --system -r requirements.txt",
   "outputDirectory": "public"
 }
