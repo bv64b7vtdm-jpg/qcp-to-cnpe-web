@@ -4,8 +4,11 @@ Parses any QCP PDF table using pdfplumber.
 """
 
 import os
-import uuid
 import re
+import uuid
+import tempfile
+from datetime import datetime
+
 import pdfplumber
 from flask import Flask, request, render_template, send_file, jsonify
 from werkzeug.utils import secure_filename
@@ -17,7 +20,7 @@ app = Flask(__name__,
             static_folder=os.path.join(BASE_DIR, 'static'))
 app.secret_key = os.environ.get('SECRET_KEY', 'qcp-cnpe-secret-key-2026')
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
-app.config['UPLOAD_FOLDER'] = '/tmp/qcp-uploads'
+app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()
 
 ALLOWED_EXTENSIONS = {'pdf'}
 
@@ -53,27 +56,17 @@ def upload():
         if not allowed_file(file.filename):
             return jsonify({'error': '只支持PDF格式文件'}), 400
 
-        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
         pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], f"{uuid.uuid4().hex}_{secure_filename(file.filename)}")
         file.save(pdf_path)
 
-        # Parse QCP data from PDF
-        qcp_data = extract_qcp_data(pdf_path)
+        steps = extract_qcp_data(pdf_path)
 
-        if not qcp_data:
+        if not steps:
             os.remove(pdf_path)
-            return jsonify({'error': '未能从PDF中识别到QCP工序数据。请确认PDF为文本型（不是扫描件），且包含工序号列表。'}), 422
+            return jsonify({'error': '未能从PDF中识别到QCP工序数据。请确认PDF为文本型（不是扫描件）。'}), 422
 
         output_path = os.path.join(app.config['UPLOAD_FOLDER'], f"CNPE_转换_{item_code_19}.xlsx")
-        template_path = os.path.join(BASE_DIR, 'templates', 'CNPE_质量计划导入Excel模板.xlsx')
-
-        if os.path.exists(template_path):
-            from utils.excel_filler import fill_cnpe_template
-            fill_cnpe_template(template_path, output_path, qcp_data, item_code_19, part_no, supplier_item_code)
-        else:
-            # No template - generate from scratch
-            generate_cnpe_excel(output_path, qcp_data, item_code_19, part_no, supplier_item_code)
-
+        generate_cnpe_excel(output_path, steps, item_code_19, part_no, supplier_item_code)
         os.remove(pdf_path)
 
         return send_file(output_path,
@@ -87,6 +80,8 @@ def upload():
         return jsonify({'error': str(e)}), 500
 
 
+STEP_RE = re.compile(r'^([A-Z](?:\d+(?:\.\d+)*))$')
+
 def extract_qcp_data(pdf_path):
     """Extract QCP steps from any QCP PDF using table detection."""
     all_steps = []
@@ -99,94 +94,74 @@ def extract_qcp_data(pdf_path):
                 for row in table:
                     if not row or len(row) < 2:
                         continue
-
-                    # Try multiple column positions for step number
-                    cell0 = (row[0] or '').strip()
-                    cell1 = (row[1] or '').strip()
-
-                    # Find the step number column (letter + number pattern like A1, B2.3, C1.1.2)
-                    step_num = None
-                    step_name = None
-
-                    # Check cell0 as step number
-                    if cell0 and re.match(r'^[A-Z]\d+', cell0):
-                        step_num = cell0
-                        step_name = cell1
-                    # Check cell1 as step number (name in cell0)
-                    elif cell1 and re.match(r'^[A-Z]\d+', cell1):
-                        step_num = cell1
-                        step_name = cell0
-
-                    if step_num and step_name:
-                        # Clean up step name
-                        name_lines = step_name.split('\n')
-                        clean_name = name_lines[0].strip() if name_lines else step_name.strip()
-
-                        # Skip if name is too short or looks like a header
-                        if len(clean_name) < 2:
+                    cells = [str(c).strip() if c else '' for c in row]
+                    for idx, cell in enumerate(cells):
+                        m = STEP_RE.match(cell)
+                        if not m:
                             continue
-                        if clean_name in ('序号', 'No.', '工序名称', 'Process Name', '报告编号', 'Remark'):
+                        step_num = m.group(1)
+                        # Skip year patterns like A2026, B2025
+                        inner = step_num.lstrip('ABCDEFGHIJKLMNOPQRSTUVWXYZ')
+                        if inner.startswith('20') or inner.startswith('19'):
                             continue
-
-                        # Skip pure English without Chinese (might be headers)
-                        has_chinese = re.search(r'[\u4e00-\u9fa5]', clean_name)
-                        has_meaningful_content = len(clean_name) >= 2
-                        if not (has_chinese or has_meaningful_content):
-                            continue
-
-                        key = f"{step_num}|{clean_name}"
-                        if key not in seen_keys:
-                            seen_keys.add(key)
-                            all_steps.append({
-                                'step': step_num,
-                                'name': clean_name,
-                                'content': ' '.join(name_lines[1:]).strip() if len(name_lines) > 1 else ''
-                            })
-                        continue
-
-                    # Try cell1 alone
-                    if cell1 and re.match(r'^[A-Z]\d+(?:\.\d+)*$', cell1.strip()):
-                        step_num = cell1.strip()
-                        step_name = cell0
+                        step_name = None
+                        for offset in range(1, 4):
+                            ni = idx + offset
+                            if ni < len(cells):
+                                nc = cells[ni].strip()
+                                if not nc:
+                                    continue
+                                if nc in ('序号', 'No.', '工序名称', 'Process Name', '报告编号', 'Remark', '备注', '版', 'Rev.', 'S', 'C', 'O', 'W', 'H', 'R', '图号', 'Specification', '零件名称', 'Part Name', 'Part No.', '零件编号', '材质', 'Material', 'Pending', 'No report', '查', 'NA', 'R', 'W', 'H'):
+                                    continue
+                                if re.match(r'^\d{2,4}[-./]', nc):
+                                    continue
+                                if len(nc) < 2:
+                                    continue
+                                step_name = nc.split('\n')[0].strip()
+                                break
                         if step_name and len(step_name) >= 2:
-                            name_lines = step_name.split('\n')
-                            clean_name = name_lines[0].strip()
-                            key = f"{step_num}|{clean_name}"
+                            # Skip section headers where step == name
+                            if step_num == step_name:
+                                continue
+                            # For A-series without sub-number, skip BOM items
+                            letter = step_num[0]
+                            if letter == 'A' and '.' not in step_num:
+                                continue
+                            key = f"{step_num}|{step_name}"
                             if key not in seen_keys:
                                 seen_keys.add(key)
                                 all_steps.append({
                                     'step': step_num,
-                                    'name': clean_name,
+                                    'name': step_name,
                                     'content': ''
                                 })
 
-    # Sort by step number
     def sort_key(s):
-        num = re.sub(r'[A-Z]', '', s['step'])
-        parts = num.split('.')
-        return [int(p) if p.isdigit() else 0 for p in parts]
+        m = re.match(r'^([A-Z])(\d+(?:\.\d+)*)', s['step'])
+        if m:
+            return (m.group(1), [int(x) for x in m.group(2).split('.')])
+        return (s['step'], [])
 
     all_steps.sort(key=sort_key)
     return all_steps
 
 
-def generate_cnpe_excel(output_path, qcp_data, item_code_19, part_no, supplier_item_code):
-    """Generate CNPE Excel from QCP data without template."""
+def generate_cnpe_excel(output_path, steps, item_code_19, part_no, supplier_item_code):
+    """Generate CNPE Excel from QCP data."""
     try:
         from openpyxl import Workbook
-        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.styles import Font, PatternFill, Alignment
 
         wb = Workbook()
-
-        # Sheet 1: QCP工序
         ws = wb.active
         ws.title = 'QCP工序'
 
-        # Header
+        # Title
         ws['A1'] = 'QCP转CNPE质量计划'
         ws['A1'].font = Font(bold=True, size=14)
         ws.merge_cells('A1:F1')
 
+        # Info
         ws['A3'] = '19位编码'
         ws['B3'] = item_code_19
         ws['A4'] = '零件号'
@@ -194,49 +169,47 @@ def generate_cnpe_excel(output_path, qcp_data, item_code_19, part_no, supplier_i
         ws['A5'] = '厂家物项编号'
         ws['B5'] = supplier_item_code
         ws['A6'] = '生成日期'
-        from datetime import datetime
         ws['B6'] = datetime.now().strftime('%Y-%m-%d')
+        ws['A7'] = '工序数量'
+        ws['B7'] = len(steps)
 
-        # Table header
+        # Header row
+        hdr_fill = PatternFill(start_color='667EEA', end_color='667EEA', fill_type='solid')
+        hdr_font = Font(bold=True, color='FFFFFF', size=11)
         headers = ['序号', '工序号', '工序名称', '质量控制点', '报告编号', '备注']
-        header_row = 8
-        header_fill = PatternFill(start_color='667EEA', end_color='667EEA', fill_type='solid')
-        header_font = Font(bold=True, color='FFFFFF', size=11)
-
-        for col, header in enumerate(headers, 1):
-            cell = ws.cell(row=header_row, column=col, value=header)
-            cell.fill = header_fill
-            cell.font = header_font
-            cell.alignment = Alignment(horizontal='center', vertical='center')
+        for col, h in enumerate(headers, 1):
+            c = ws.cell(row=9, column=col, value=h)
+            c.fill = hdr_fill
+            c.font = hdr_font
+            c.alignment = Alignment(horizontal='center', vertical='center')
 
         # Data rows
-        for i, row_data in enumerate(qcp_data):
-            row_num = header_row + 1 + i
-            ws.cell(row=row_num, column=1, value=i + 1)
-            ws.cell(row=row_num, column=2, value=row_data['step'])
-            ws.cell(row=row_num, column=3, value=row_data['name'])
-            ws.cell(row=row_num, column=4, value='')
-            ws.cell(row=row_num, column=5, value='')
-            ws.cell(row=row_num, column=6, value=row_data.get('content', ''))
-
-            # Alternate row colors
+        for i, step in enumerate(steps):
+            r = 10 + i
+            ws.cell(row=r, column=1, value=i + 1)
+            ws.cell(row=r, column=2, value=step['step'])
+            ws.cell(row=r, column=3, value=step['name'])
+            ws.cell(row=r, column=4, value='')
+            ws.cell(row=r, column=5, value='')
+            ws.cell(row=r, column=6, value=step.get('content', ''))
             if i % 2 == 0:
+                alt_fill = PatternFill(start_color='F8F6FF', end_color='F8F6FF', fill_type='solid')
                 for col in range(1, 7):
-                    ws.cell(row=row_num, column=col).fill = PatternFill(start_color='F8F6FF', end_color='F8F6FF', fill_type='solid')
+                    ws.cell(row=r, column=col).fill = alt_fill
 
         # Column widths
         ws.column_dimensions['A'].width = 8
         ws.column_dimensions['B'].width = 12
-        ws.column_dimensions['C'].width = 30
+        ws.column_dimensions['C'].width = 35
         ws.column_dimensions['D'].width = 12
         ws.column_dimensions['E'].width = 20
-        ws.column_dimensions['F'].width = 30
+        ws.column_dimensions['F'].width = 35
 
         # Sheet 2: 填写说明
         ws2 = wb.create_sheet('填写说明')
         notes = [
             ['QCP转CNPE填写说明'],
-            [''],
+            [],
             ['字段', '说明', '示例'],
             ['19位编码', '采购订单中的19位物料编码', '1P12345678901234567'],
             ['零件号', '可选，零件编号', 'A19'],
@@ -247,23 +220,24 @@ def generate_cnpe_excel(output_path, qcp_data, item_code_19, part_no, supplier_i
             ['质量控制点', 'R/W/H', 'W'],
             ['报告编号', '对应的检验程序编号', 'SKR80004540...'],
             ['备注', '检验内容或备注', ''],
+            [],
+            ['支持的QCP格式', '适用于KSB SEC-KSB、三门、漳州等多种QCP表格格式', ''],
         ]
-        for row_idx, row_data in enumerate(notes, 1):
-            for col_idx, value in enumerate(row_data, 1):
-                cell = ws2.cell(row=row_idx, column=col_idx, value=value)
-                if row_idx == 3:
-                    cell.font = Font(bold=True)
-        ws2.column_dimensions['A'].width = 15
-        ws2.column_dimensions['B'].width = 35
+        for ri, row_data in enumerate(notes, 1):
+            for ci, val in enumerate(row_data, 1):
+                c = ws2.cell(row=ri, column=ci, value=val)
+                if ri == 3:
+                    c.font = Font(bold=True)
+        ws2.column_dimensions['A'].width = 18
+        ws2.column_dimensions['B'].width = 40
         ws2.column_dimensions['C'].width = 30
 
         wb.save(output_path)
 
     except ImportError:
-        # Fallback: use XLSXWriter equivalent via openpyxl or simple csv
+        # Fallback to CSV if openpyxl not available
         import csv
-        csv_path = output_path.replace('.xlsx', '.csv')
-        with open(csv_path, 'w', newline='', encoding='utf-8-sig') as f:
+        with open(output_path.replace('.xlsx', '.csv'), 'w', newline='', encoding='utf-8-sig') as f:
             writer = csv.writer(f)
             writer.writerow(['QCP转CNPE质量计划'])
             writer.writerow(['19位编码', item_code_19])
@@ -272,20 +246,6 @@ def generate_cnpe_excel(output_path, qcp_data, item_code_19, part_no, supplier_i
             writer.writerow(['生成日期', datetime.now().strftime('%Y-%m-%d')])
             writer.writerow([])
             writer.writerow(['序号', '工序号', '工序名称', '备注'])
-            for i, row_data in enumerate(qcp_data, 1):
-                writer.writerow([i, row_data['step'], row_data['name'], row_data.get('content', '')])
-        # Convert CSV to XLSX using openpyxl
-        from openpyxl import Workbook
-        wb = Workbook()
-        ws = wb.active
-        ws.title = 'QCP工序'
-        with open(csv_path, 'r', encoding='utf-8-sig') as f:
-            reader = csv.reader(f)
-            for row in reader:
-                ws.append(row)
-        wb.save(output_path)
-        os.remove(csv_path)
-
-
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+            for i, s in enumerate(steps, 1):
+                writer.writerow([i, s['step'], s['name'], s.get('content', '')])
+        os.rename(output_path.replace('.xlsx', '.csv'), output_path)
