@@ -302,7 +302,7 @@ def q_val(step):
     """Q列（是否产生报告）判断逻辑。优先级：
     1. 先决条件检查 / 计划关闭 → N
     2. 备注含 'No report' → N
-    3. 有 WHR 点 → Y
+    3. K列（S列）或R列（A列）有选点（H点/W点/R点）→ Y
     4. 其他 → N
     """
     n = step['name']
@@ -310,7 +310,7 @@ def q_val(step):
         return 'N'
     if 'No report' in step['remark']:
         return 'N'
-    if step['whr_s']:
+    if step['whr_s'] or step['whr_a']:
         return 'Y'
     return 'N'
 
