@@ -1,0 +1,10 @@
+/* Static CSS - minimal since most styles are inlined in index.html */
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+/* Additional utility classes if needed */
+.hidden {
+    display: none;
+}
