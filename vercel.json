@@ -1,10 +1,10 @@
 {
   "framework": null,
-  "buildCommand": "mkdir -p public && echo done > public/placeholder.txt",
+  "buildCommand": null,
   "installCommand": "uv pip install --system -r requirements.txt",
-  "outputDirectory": "public",
+  "outputDirectory": null,
   "devCommand": null,
-  "rewrites": [
-    {"source": "/(.*)", "destination": "/api/index"}
+  "routes": [
+    {"src": "/(.*)", "dest": "/api/index"}
   ]
 }
