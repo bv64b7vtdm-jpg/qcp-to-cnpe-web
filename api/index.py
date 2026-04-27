@@ -1,21 +1,25 @@
 """
 Flask web application for QCP to CNPE Excel conversion.
+Vercel serverless compatible version.
 """
 
 import os
 import uuid
+import sys
 from flask import Flask, request, render_template, send_file, jsonify, session
 from functools import wraps
 from werkzeug.utils import secure_filename
 
-from utils.pdf_parser import detect_pdf_type, extract_qcp_data
+# Fix template path for Vercel
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-app = Flask(__name__)
+app = Flask(__name__,
+            template_folder=os.path.join(BASE_DIR, 'templates'),
+            static_folder=os.path.join(BASE_DIR, 'static'))
 app.secret_key = os.environ.get('SECRET_KEY', 'qcp-cnpe-secret-key-2026')
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024  # 50MB max file size
+app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 app.config['UPLOAD_FOLDER'] = '/tmp/qcp-uploads'
 
-# Simple password - change via env var QCP_PASSWORD before deployment
 APP_PASSWORD = os.environ.get('QCP_PASSWORD', 'KSB2026')
 
 ALLOWED_EXTENSIONS = {'pdf'}
@@ -30,7 +34,7 @@ def password_required(f):
     return decorated_function
 
 
-def allowed_file(filename: str) -> bool:
+def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
@@ -77,8 +81,10 @@ def upload():
         filename = secure_filename(file.filename)
         unique_filename = f"{uuid.uuid4().hex}_{filename}"
         pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+        os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
         file.save(pdf_path)
 
+        from utils.pdf_parser import detect_pdf_type, extract_qcp_data
         pdf_type = detect_pdf_type(pdf_path)
         qcp_data = extract_qcp_data(pdf_path)
 
@@ -92,9 +98,7 @@ def upload():
         output_filename = f"CNPE_转换_{item_code_19}.xlsx"
         output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
 
-        template_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'templates',
-            'CNPE_质量计划导入Excel模板.xlsx'
-        )
+        template_path = os.path.join(BASE_DIR, 'templates', 'CNPE_质量计划导入Excel模板.xlsx')
 
         if not os.path.exists(template_path):
             os.remove(pdf_path)
@@ -127,7 +131,3 @@ def upload():
 @app.route('/health', methods=['GET'])
 def health():
     return jsonify({'status': 'ok'})
-
-
-if __name__ == '__main__':
-    app.run(debug=False, host='0.0.0.0', port=5000)
