@@ -1,8 +1,7 @@
 {
-  "buildCommand": null,
-  "installCommand": "uv pip install --system -r requirements.txt",
-  "outputDirectory": "public",
+  "buildCommand": "pip install -r requirements.txt",
+  "installCommand": "pip install -r requirements.txt",
   "rewrites": [
-    {"source": "/api/(.*)", "destination": "/api/index"}
+    {"source": "/(.*)", "destination": "/api/index"}
   ]
 }
