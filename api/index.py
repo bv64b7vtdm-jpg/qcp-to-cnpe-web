@@ -44,12 +44,12 @@ def health():
 @app.route('/upload', methods=['POST'])
 def upload():
     try:
-        item_code_19 = request.form.get('item_code_19', '').strip()
+        item_code_19_input = request.form.get('item_code_19', '').strip()
         supplier_item_code = request.form.get('supplier_item_code', '').strip()
         part_no = request.form.get('part_no', '').strip()
 
-        if not item_code_19 or not supplier_item_code:
-            return jsonify({'error': '19位编码和厂家物项编号为必填项'}), 400
+        if not supplier_item_code:
+            return jsonify({'error': '厂家物项编号为必填项'}), 400
 
         file = request.files.get('file')
         if not file or file.filename == '':
@@ -62,6 +62,19 @@ def upload():
                                 f"{uuid.uuid4().hex}_{secure_filename(file.filename)}")
         file.save(pdf_path)
 
+        # 19位编码：优先用用户输入，否则从文件名/PDF提取并核对
+        code19, code19_note = validate_code19(file.filename, pdf_path)
+        if item_code_19_input:
+            # 用户提供了编码，仍需核对
+            code_from_pdf = extract_code19_from_pdf(pdf_path)
+            if code_from_pdf and item_code_19_input.upper() != code_from_pdf:
+                code19_note = f'文件名编码{code_from_pdf}，用户指定{item_code_19_input}，以用户指定为准'
+                code19 = item_code_19_input
+            else:
+                code19 = item_code_19_input
+        else:
+            item_code_19 = code19
+
         steps = extract_qcp_with_whr(pdf_path)
 
         if not steps:
@@ -73,10 +86,12 @@ def upload():
         fill_template_surgical(output_path, steps, item_code_19, supplier_item_code)
         os.remove(pdf_path)
 
-        return send_file(output_path,
+        resp = send_file(output_path,
             mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
             as_attachment=True,
             download_name=output_name)
+        resp.headers['X-Code19-Note'] = code19_note
+        return resp
 
     except Exception as e:
         import traceback
@@ -91,7 +106,52 @@ STEP_RE = re.compile(r'^([A-Z]\d+(?:\.\d+)*\*?)$')
 STEP_NUM_RE = re.compile(r'^(\d+[A-Z]?(?:-\d+)*|[A-Z]-\d+(?:-\d+)*|[A-Z]-\d+-[a-z])$')
 WHR_RE = re.compile(r'\b([WHR])\b')
 DOC_RE = re.compile(r'^([A-Z]{2,}\d+)')
+CODE19_RE = re.compile(r'(SMX[0-9A-Z]{16,20}|(?:SMX)?44400[A-Z0-9]{10,14}GN?)')
 
+
+def extract_code19_from_filename(filename):
+    """从文件名提取19位编码。"""
+    m = CODE19_RE.search(filename.upper())
+    if m:
+        code = m.group(0)
+        # 标准化：统一为SMX开头20位
+        if code.startswith('SMX') and len(code) >= 16:
+            return code[:20] if len(code) > 20 else code
+    return None
+
+
+def extract_code19_from_pdf(pdf_path):
+    """从PDF内容页提取19位编码（通常在第1页或表格表头）。"""
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages[:3]:  # 只查前3页
+            text = page.extract_text() or ''
+            # 匹配 SMX44400Z... 格式
+            matches = re.findall(r'(SMX44400[A-Z0-9]{12}GN?)', text.upper())
+            if matches:
+                return matches[0][:20] if len(matches[0]) > 20 else matches[0]
+            # 也匹配 SMX 开头 + 16位
+            matches2 = re.findall(r'(SMX[0-9A-Z]{16})', text.upper())
+            if matches2:
+                return matches2[0]
+    return None
+
+
+def validate_code19(filename, pdf_path):
+    """核对文件名编码与文件内编码，返回准确实码。"""
+    code_from_name = extract_code19_from_filename(filename)
+    code_from_pdf = extract_code19_from_pdf(pdf_path)
+
+    if code_from_name and code_from_pdf:
+        if code_from_name == code_from_pdf:
+            return code_from_pdf, f'{code_from_pdf}'
+        else:
+            # 不一致，以文件内为准
+            return code_from_pdf, f'{code_from_name}→{code_from_pdf}'
+    elif code_from_pdf:
+        return code_from_pdf, f'{code_from_pdf}'
+    elif code_from_name:
+        return code_from_name, f'{code_from_name}'
+    return 'UNKNOWN', '未能识别'
 
 def _is_valid_step(s):
     if not s: return False
