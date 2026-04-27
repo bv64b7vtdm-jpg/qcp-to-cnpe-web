@@ -8,7 +8,7 @@ from flask import Flask, request, render_template, send_file, jsonify, session
 from functools import wraps
 from werkzeug.utils import secure_filename
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 app = Flask(__name__,
             template_folder=os.path.join(BASE_DIR, 'templates'),
@@ -31,7 +31,6 @@ def index():
 
 @app.route('/login', methods=['POST'])
 def login():
-    # No password for now - just allow login
     session['authenticated'] = True
     return jsonify({'status': 'ok'})
 
