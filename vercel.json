@@ -6,8 +6,7 @@
   "devCommand": null,
   "functions": {
     "api/index.py": {
-      "runtime": "python3.12",
-      "handler": "api/index.handler"
+      "runtime": "python3.12"
     }
   },
   "routes": [
