@@ -6,10 +6,13 @@
   "devCommand": null,
   "functions": {
     "api/index.py": {
-      "runtime": "python3.12"
+      "runtime": "python3"
     }
   },
   "routes": [
-    {"src": "/(.*)", "dest": "/api/index"}
+    {
+      "src": "/(.*)",
+      "dest": "/api/index"
+    }
   ]
 }
