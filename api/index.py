@@ -1,14 +1,20 @@
 """
-Flask web app for QCP to CNPE conversion.
+Vercel serverless handler for QCP→CNPE Flask app.
 """
 
 import os
-import uuid
-from flask import Flask, request, render_template, send_file, jsonify, session
-from functools import wraps
-from werkzeug.utils import secure_filename
+import sys
+import io
+import json
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, BASE_DIR)
+
+from flask import Flask, request, render_template, send_file, jsonify, session
+from werkzeug.utils import secure_filename
+import uuid
+
+ALLOWED_EXTENSIONS = {'pdf'}
 
 app = Flask(__name__,
             template_folder=os.path.join(BASE_DIR, 'templates'),
@@ -16,8 +22,6 @@ app = Flask(__name__,
 app.secret_key = os.environ.get('SECRET_KEY', 'qcp-cnpe-secret-key-2026')
 app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 app.config['UPLOAD_FOLDER'] = '/tmp/qcp-uploads'
-
-ALLOWED_EXTENSIONS = {'pdf'}
 
 
 def allowed_file(filename):
@@ -90,4 +94,53 @@ def health():
     return jsonify({'status': 'ok'})
 
 
-handler = app
+def handler(event, context=None):
+    """Vercel Python serverless entry point."""
+    path = event.get('path', '/')
+    http_method = event.get('httpMethod', 'GET')
+    headers = event.get('headers', {})
+    query = event.get('query', {})
+    body = event.get('body', '')
+
+    if http_method == 'OPTIONS':
+        return {'statusCode': 200, 'headers': {'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type'}, 'body': ''}
+
+    # Build URL for test client
+    scheme = headers.get('x-forwarded-proto', 'https')
+    host = headers.get('host', 'localhost')
+    url = f'{scheme}://{host}{path}'
+    if query:
+        url += '?' + '&'.join(f'{k}={v}' for k, v in query.items())
+
+    headers_lower = {k.lower(): v for k, v in headers.items()}
+
+    with app.test_client() as client:
+        if http_method == 'GET':
+            rv = client.get(path, headers=headers_lower)
+        elif http_method == 'POST':
+            content_type = headers.get('content-type', 'application/json')
+            if 'application/json' in content_type:
+                rv = client.post(path, data=body, headers=headers_lower, content_type=content_type)
+            elif 'multipart/form-data' in content_type:
+                rv = client.post(path, data=body, headers=headers_lower)
+            else:
+                rv = client.post(path, data=body, headers=headers_lower)
+        else:
+            rv = client.open(path, method=http_method, headers=headers_lower)
+
+        response_headers = {}
+        for k, v in rv.headers:
+            k_lower = k.lower()
+            if k_lower not in ('content-encoding', 'transfer-encoding', 'connection'):
+                response_headers[k.title()] = v
+
+        response_body = rv.get_data(as_text=True)
+        if not isinstance(response_body, str):
+            response_body = str(response_body)
+
+        return {
+            'statusCode': rv.status_code,
+            'headers': response_headers,
+            'body': response_body,
+            'isBase64Encoded': False,
+        }
