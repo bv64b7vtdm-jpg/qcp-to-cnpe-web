@@ -79,19 +79,7 @@ def upload():
         pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         file.save(pdf_path)
 
-        pdf_type = detect_pdf_type(pdf_path)
-        qcp_data = extract_qcp_data(pdf_path)
-
-        if not qcp_data:
-            os.remove(pdf_path)
-            return jsonify({
-                'error': '未能从PDF中提取到工序数据。请确认PDF为QCP质量计划格式。',
-                'pdf_type': pdf_type
-            }), 422
-
-        output_filename = f"CNPE_转换_{item_code_19}.xlsx"
-        output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
-
+        # 调用 v3.7 一站式转换
         template_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             'templates',
@@ -102,14 +90,16 @@ def upload():
             os.remove(pdf_path)
             return jsonify({'error': 'Excel模板文件不存在'}), 500
 
-        from utils.excel_filler import fill_cnpe_template
-        fill_cnpe_template(
-            template_path=template_path,
-            output_path=output_path,
-            qcp_data=qcp_data,
-            item_code_19=item_code_19,
-            part_no=part_no,
-            supplier_item_code=supplier_item_code
+        output_filename = f"CNPE_转换_{item_code_19}.xlsx"
+        output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
+
+        # v3.7 接口：convert_qcp_to_cnpe(pdf, tmpl, item_code, supplier_count=None, out_path=None)
+        from qcp_converter import convert_qcp_to_cnpe
+        out_path, n_procedures, supplier_count = convert_qcp_to_cnpe(
+            pdf_path=pdf_path,
+            tmpl_path=template_path,
+            item_code=item_code_19,
+            out_path=output_path
         )
 
         os.remove(pdf_path)
@@ -122,6 +112,8 @@ def upload():
         )
 
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         print(f"Error: {str(e)}")
         return jsonify({'error': f'处理失败: {str(e)}'}), 500
 
