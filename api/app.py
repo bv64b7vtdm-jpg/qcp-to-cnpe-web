@@ -95,6 +95,13 @@ def upload():
         pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         file.save(pdf_path)
 
+        # 泵壳及子件特殊规则（2026-08-19 陈老师反馈）：
+        # 19 位编码 Z 段为 Z4x/Z5x/Z6x/Z7x → 强制使用 1907RCP10101
+        z_segment = item_code_19[8:11] if len(item_code_19) >= 11 else ''
+        if z_segment.startswith(('Z4', 'Z5', 'Z6', 'Z7')):
+            item_code_19 = '1907RCP10101'
+            app.logger.info(f'泵壳相关 QCP (Z段={z_segment}) → 强制使用 1907RCP10101')
+
         # 调用 v3.7 一站式转换
         template_path = os.path.join(BASE_DIR, 'templates', 'CNPE_质量计划导入Excel模板.xlsx')
 
