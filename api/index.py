@@ -72,6 +72,7 @@ def upload():
                 code19 = item_code_19_input
             else:
                 code19 = item_code_19_input
+            item_code_19 = code19
         else:
             item_code_19 = code19
 
