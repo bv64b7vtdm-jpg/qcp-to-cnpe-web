@@ -1,157 +1,38 @@
 """
-Flask web app for QCP to CNPE Excel conversion.
-Surgical XML approach: keep template rows 1-9 intact, only replace data row values.
+Batch process 3 QCP PDFs → CNPE Excel.
+Extract core logic without Flask imports.
 """
-
 import os
 import re
 import shutil
-import uuid
 import zipfile
-import tempfile
-
 import pdfplumber
-from flask import Flask, request, render_template, send_file, jsonify
-from werkzeug.utils import secure_filename
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 TEMPLATE_PATH = os.path.join(BASE_DIR, 'template', 'CNPE_质量计划导入Excel模板.xlsx')
+OUT_DIR = '/mnt/d/SynologyDrive/QCP to Excel/'
 
-app = Flask(__name__,
-            template_folder=os.path.join(BASE_DIR, 'templates'),
-            static_folder=os.path.join(BASE_DIR, 'static'))
-app.secret_key = os.environ.get('SECRET_KEY', 'qcp-cnpe-secret-key-2026')
-app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
-app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()
+PDFS = [
+    {
+        'path': '/mnt/d/SynologyDrive/NAS temp/SMX44400Z59101A04GN Rev.A1 PRE 三门核电项目5、6号机组反应堆冷却剂泵泵壳塞孔不锈钢堆焊质量计划（11232010400315_ _ _）.pdf',
+        'part_no': '泵壳塞孔不锈钢堆焊',
+    },
+    {
+        'path': '/mnt/d/SynologyDrive/NAS temp/SMX44400Z61101A04GN Rev.A1 PRE 三门核电项目5、6号机组反应堆冷却剂泵泵壳产品堆焊见证件制造质量计划（11232010400317_ _ _）.pdf',
+        'part_no': '泵壳产品堆焊见证件制造',
+    },
+    {
+        'path': '/mnt/d/SynologyDrive/NAS temp/SMX44400Z64101A04GN Rev.A1 PRE 三门核电项目5、6号机组反应堆冷却剂泵泵壳镍基合金气体保护焊焊丝复验质量计划（1123201040031001）.pdf',
+        'part_no': '泵壳镍基合金气体保护焊焊丝复验',
+    },
+]
 
-ALLOWED_EXTENSIONS = {'pdf'}
-
-
-def allowed_file(filename):
-    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
-
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-
-@app.route('/health')
-def health():
-    return jsonify({'status': 'ok'})
-
-
-@app.route('/upload', methods=['POST'])
-def upload():
-    try:
-        item_code_19_input = request.form.get('item_code_19', '').strip()
-        supplier_item_code = request.form.get('supplier_item_code', '').strip()
-        part_no = request.form.get('part_no', '').strip()
-
-        if not supplier_item_code:
-            return jsonify({'error': '厂家物项编号为必填项'}), 400
-
-        file = request.files.get('file')
-        if not file or file.filename == '':
-            return jsonify({'error': '请上传PDF文件'}), 400
-
-        if not allowed_file(file.filename):
-            return jsonify({'error': '只支持PDF格式文件'}), 400
-
-        pdf_path = os.path.join(app.config['UPLOAD_FOLDER'],
-                                f"{uuid.uuid4().hex}_{secure_filename(file.filename)}")
-        file.save(pdf_path)
-
-        # 19位编码：优先用用户输入，否则从文件名/PDF提取并核对
-        code19, code19_note = validate_code19(file.filename, pdf_path)
-        if item_code_19_input:
-            # 用户提供了编码，仍需核对
-            code_from_pdf = extract_code19_from_pdf(pdf_path)
-            if code_from_pdf and item_code_19_input.upper() != code_from_pdf:
-                code19_note = f'文件名编码{code_from_pdf}，用户指定{item_code_19_input}，以用户指定为准'
-                code19 = item_code_19_input
-            else:
-                code19 = item_code_19_input
-        else:
-            item_code_19 = code19
-
-        steps = extract_qcp_with_whr(pdf_path)
-
-        if not steps:
-            os.remove(pdf_path)
-            return jsonify({'error': '未能从PDF中识别到QCP工序数据。请确认PDF为文本型（不是扫描件）。'}), 422
-
-        output_name = f"{item_code_19}_{part_no}_QCP导入数据.xlsx"
-        output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_name)
-        fill_template_surgical(output_path, steps, item_code_19, supplier_item_code)
-        os.remove(pdf_path)
-
-        resp = send_file(output_path,
-            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            as_attachment=True,
-            download_name=output_name)
-        resp.headers['X-Code19-Note'] = code19_note
-        return resp
-
-    except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return jsonify({'error': str(e)}), 500
-
-
-# ─── PDF 解析 ────────────────────────────────────────────────────────────
+# ─── Replicated core functions from api/index.py ─────────────────────────────────
 
 STEP_RE = re.compile(r'^([A-Z]\d+(?:\.\d+)*\*?)$')
-# 二重装备格式步骤号：0, 1, 2, 6-1, B-1, B-5-a, B-12-1 等
 STEP_NUM_RE = re.compile(r'^(\d+[A-Z]?(?:-\d+)*|[A-Z]-\d+(?:-\d+)*|[A-Z]-\d+-[a-z])$')
-WHR_RE = re.compile(r'\b([WHR])\b')
 DOC_RE = re.compile(r'^([A-Z]{2,}\d+)')
 CODE19_RE = re.compile(r'(SMX[0-9A-Z]{16,20}|(?:SMX)?44400[A-Z0-9]{10,14}GN?)')
-
-
-def extract_code19_from_filename(filename):
-    """从文件名提取19位编码。"""
-    m = CODE19_RE.search(filename.upper())
-    if m:
-        code = m.group(0)
-        # 标准化：统一为SMX开头20位
-        if code.startswith('SMX') and len(code) >= 16:
-            return code[:20] if len(code) > 20 else code
-    return None
-
-
-def extract_code19_from_pdf(pdf_path):
-    """从PDF内容页提取19位编码（通常在第1页或表格表头）。"""
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages[:3]:  # 只查前3页
-            text = page.extract_text() or ''
-            # 匹配 SMX44400Z... 格式
-            matches = re.findall(r'(SMX44400[A-Z0-9]{12}GN?)', text.upper())
-            if matches:
-                return matches[0][:20] if len(matches[0]) > 20 else matches[0]
-            # 也匹配 SMX 开头 + 16位
-            matches2 = re.findall(r'(SMX[0-9A-Z]{16})', text.upper())
-            if matches2:
-                return matches2[0]
-    return None
-
-
-def validate_code19(filename, pdf_path):
-    """核对文件名编码与文件内编码，返回准确实码。"""
-    code_from_name = extract_code19_from_filename(filename)
-    code_from_pdf = extract_code19_from_pdf(pdf_path)
-
-    if code_from_name and code_from_pdf:
-        if code_from_name == code_from_pdf:
-            return code_from_pdf, f'{code_from_pdf}'
-        else:
-            # 不一致，以文件内为准
-            return code_from_pdf, f'{code_from_name}→{code_from_pdf}'
-    elif code_from_pdf:
-        return code_from_pdf, f'{code_from_pdf}'
-    elif code_from_name:
-        return code_from_name, f'{code_from_name}'
-    return 'UNKNOWN', '未能识别'
 
 def _is_valid_step(s):
     if not s: return False
@@ -162,29 +43,30 @@ def _is_valid_step(s):
     if re.match(r'^[A-Z]-\d+-[a-z]$', s): return True
     return False
 
+def extract_code19_from_filename(filename):
+    m = CODE19_RE.search(filename.upper())
+    if m:
+        code = m.group(0)
+        if code.startswith('SMX') and len(code) >= 16:
+            return code[:20] if len(code) > 20 else code
+    return None
+
+def extract_code19_from_pdf(pdf_path):
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages[:3]:
+            text = page.extract_text() or ''
+            matches = re.findall(r'(SMX44400[A-Z0-9]{12}GN?)', text.upper())
+            if matches:
+                return matches[0][:20] if len(matches[0]) > 20 else matches[0]
+            matches2 = re.findall(r'(SMX[0-9A-Z]{16})', text.upper())
+            if matches2:
+                return matches2[0]
+    return None
 
 def extract_qcp_with_whr(pdf_path):
-    """从 QCP PDF 提取工序数据。支持两种格式：
-
-    【SEC-KSB 19列格式】（三门泵装配 PDF）
-      col 0  → 工序号（如 A1, B1.1, E1.5）
-      col 1  → 工序名称
-      col 3  → 依据文件编号
-      col 8  → S列选点（H/W/R）
-      col 11 → A列选点
-      col 17 → 备注
-
-    【二重装备 24列格式】（泵壳底脚锻件 PDF）
-      col 0  → 工序号（如 0, 1, 6-1, B-1, B-5-a）
-      col 1  → 工序名称
-      col 4  → 依据文件编号
-      col 12 → A列选点
-      col 15 → S列选点（H/W/R）
-      col 22 → 备注
-    """
+    """从 QCP PDF 提取工序数据"""
     all_steps = []
     seen_keys = set()
-
     SKIP_CELLS = {
         '序号', 'No.', '工序名称', 'Process Name',
         '报告编号', 'Remark', '备注', '版', 'Rev.',
@@ -193,7 +75,6 @@ def extract_qcp_with_whr(pdf_path):
         'Part No.', '零件编号', '材质', 'Material',
         'Pending', 'No report', '查', 'NA'
     }
-
     with pdfplumber.open(pdf_path) as pdf:
         for page in pdf.pages:
             tables = page.extract_tables()
@@ -201,35 +82,26 @@ def extract_qcp_with_whr(pdf_path):
                 if len(table) == 0:
                     continue
                 n_cols = len(table[0])
-
-                # 判断格式：19列=SEC-KSB，24列=二重装备
                 if n_cols >= 20:
-                    fmt = 24  # 二重装备
+                    fmt = 24
                 elif n_cols >= 18:
-                    fmt = 19  # SEC-KSB
+                    fmt = 19
                 else:
                     continue
-
                 for row in table:
                     if not row:
                         continue
                     cells = [str(c).strip() if c else '' for c in row]
-
                     for idx, cell in enumerate(cells):
-                        # 工序号只允许在前5列（col 0~4），避免误识表头单元格
                         if idx > 4:
                             continue
-
                         step_num_raw = cell.strip()
                         if not _is_valid_step(step_num_raw):
                             continue
-
                         step_num = step_num_raw
                         inner = step_num.lstrip('ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/-')
                         if inner.startswith(('20', '19')):
                             continue
-
-                        # ── 名称 ──────────────────────────
                         name = ''
                         for offset in range(1, min(len(cells), 25)):
                             nc = cells[idx + offset] if idx + offset < len(cells) else ''
@@ -239,51 +111,31 @@ def extract_qcp_with_whr(pdf_path):
                                 continue
                             name = nc.split('\n')[0].strip()
                             break
-                        # 过滤无效名称：日期、PRE、仅大写字母等
                         if not name or name == step_num:
                             continue
                         if name in ('PRE', 'N/A', 'NA', 'Pending'):
                             continue
-                        # 日期格式（如 2024-08-30）
                         if re.match(r'^\d{4}[-/]\d{2}[-/]\d{2}$', name):
                             continue
-
-                        # BOM 过滤
                         if '.' not in step_num and '-' not in step_num:
                             if re.search(r'\d', name):
                                 break
-
-                        # ── WHR 提取 ──────────────────────
                         if fmt == 24:
-                            # 二重装备：col 15=S列
                             s_idx = idx + 15
-                            whr_s = ''
-                            if s_idx < len(cells):
-                                raw = cells[s_idx].replace('点', '').strip()
-                                if raw in ('W', 'H', 'R'):
-                                    whr_s = raw + '点'
-                            # col 12=A列
+                            whr_s = cells[s_idx].replace('点', '').strip() if s_idx < len(cells) else ''
+                            whr_s = whr_s if whr_s in ('W', 'H', 'R') else ''
                             a_idx = idx + 12
-                            whr_a = ''
-                            if a_idx < len(cells):
-                                raw = cells[a_idx].replace('点', '').strip()
-                                if raw in ('W', 'H', 'R'):
-                                    whr_a = raw + '点'
-                            # col 17=C列
+                            whr_a = cells[a_idx].replace('点', '').strip() if a_idx < len(cells) else ''
+                            whr_a = whr_a if whr_a in ('W', 'H', 'R') else ''
                             c_idx = idx + 17
-                            whr_c = ''
-                            if c_idx < len(cells):
-                                raw = cells[c_idx].replace('点', '').strip()
-                                if raw in ('W', 'H', 'R'):
-                                    whr_c = raw + '点'
-                            # col 4=文件编号
+                            whr_c = cells[c_idx].replace('点', '').strip() if c_idx < len(cells) else ''
+                            whr_c = whr_c if whr_c in ('W', 'H', 'R') else ''
                             doc_no = ''
                             doc_idx = idx + 4
                             if doc_idx < len(cells):
                                 raw = cells[doc_idx].strip()
                                 if DOC_RE.match(raw):
                                     doc_no = raw.split('\n')[0].strip()
-                            # col 22=备注
                             remark = ''
                             rem_idx = idx + 22
                             if rem_idx < len(cells):
@@ -293,26 +145,15 @@ def extract_qcp_with_whr(pdf_path):
                                 elif raw and raw not in ('No report', 'NA', '查'):
                                     remark = raw.split('\n')[0].strip()
                         else:
-                            # SEC-KSB：col 8=S列，col 11=A列，col 3=文件，col 17=备注
                             s_idx = idx + 8
-                            whr_s = ''
-                            if s_idx < len(cells):
-                                raw = cells[s_idx].replace('点', '').strip()
-                                if raw in ('W', 'H', 'R'):
-                                    whr_s = raw + '点'
+                            whr_s = cells[s_idx].replace('点', '').strip() if s_idx < len(cells) else ''
+                            whr_s = whr_s if whr_s in ('W', 'H', 'R') else ''
                             a_idx = idx + 11
-                            whr_a = ''
-                            if a_idx < len(cells):
-                                raw = cells[a_idx].replace('点', '').strip()
-                                if raw in ('W', 'H', 'R'):
-                                    whr_a = raw + '点'
-                            # col 11=C列（SEC-KSB 19列格式）
+                            whr_a = cells[a_idx].replace('点', '').strip() if a_idx < len(cells) else ''
+                            whr_a = whr_a if whr_a in ('W', 'H', 'R') else ''
                             c_idx = idx + 11
-                            whr_c = ''
-                            if c_idx < len(cells):
-                                raw = cells[c_idx].replace('点', '').strip()
-                                if raw in ('W', 'H', 'R'):
-                                    whr_c = raw + '点'
+                            whr_c = cells[c_idx].replace('点', '').strip() if c_idx < len(cells) else ''
+                            whr_c = whr_c if whr_c in ('W', 'H', 'R') else ''
                             doc_no = ''
                             doc_idx = idx + 3
                             if doc_idx < len(cells):
@@ -327,7 +168,6 @@ def extract_qcp_with_whr(pdf_path):
                                     remark = 'No report'
                                 elif raw and raw not in ('No report', 'NA', '查'):
                                     remark = raw.split('\n')[0].strip()
-
                         key = f"{step_num}|{name}"
                         if key not in seen_keys:
                             seen_keys.add(key)
@@ -341,10 +181,8 @@ def extract_qcp_with_whr(pdf_path):
                                 'remark': remark,
                             })
                         break
-
     def sort_key(s):
         num = s['step']
-        # 统一排序：数字部分 + 字母前缀
         m = re.match(r'^([A-Z]?)(-?)(\d+)(.*)$', num)
         if m:
             prefix = m.group(1) or ''
@@ -353,18 +191,10 @@ def extract_qcp_with_whr(pdf_path):
             suffix = m.group(4) or ''
             return (prefix, dash, nums, suffix)
         return (num, '', [], '')
-
     all_steps.sort(key=sort_key)
     return all_steps
 
-
 def q_val(step):
-    """Q列（是否产生报告）判断逻辑。优先级：
-    1. 先决条件检查 / 计划关闭 → N
-    2. 备注含 'No report' → N
-    3. K列（S列）或R列（A列）有选点（H点/W点/R点）→ Y
-    4. K列和R列都无选点时 → N
-    """
     n = step['name']
     if '先决条件检查' in n or '计划关闭' in n:
         return 'N'
@@ -374,57 +204,52 @@ def q_val(step):
         return 'Y'
     return 'N'
 
+def extract_supplier_code_from_pdf(pdf_path):
+    """提取厂家物项编码"""
+    with pdfplumber.open(pdf_path) as pdf:
+        for page in pdf.pages[:3]:
+            text = page.extract_text() or ''
+            # 找 44400 或 SMX 开头但不是19位编码的字符串（通常是厂家编码）
+            matches = re.findall(r'(44400[A-Z0-9]{8,14})', text.upper())
+            for m in matches:
+                if len(m) >= 8:
+                    return m
+    return ''
 
 def fill_template_surgical(output_path, steps, item_code_19, supplier_item_code):
-    """手术式 XML 修改：
-    1. 复制模板 xlsx
-    2. 替换 xl/sharedStrings.xml（追加新字符串）
-    3. 替换 xl/worksheets/sheet2.xml（保留 rows 1-9，改写 rows 10+ 的 cell 值）
-    """
+    """手术式 XML 修改"""
     if not os.path.exists(TEMPLATE_PATH):
         raise FileNotFoundError(f"模板文件不存在: {TEMPLATE_PATH}")
-
     if os.path.exists(output_path):
         os.remove(output_path)
     shutil.copy(TEMPLATE_PATH, output_path)
-
     pid = os.getpid()
     work_dir = f'/tmp/pdf_work/xlsx_{pid}'
     if os.path.exists(work_dir):
         shutil.rmtree(work_dir)
     os.makedirs(work_dir)
-
     with zipfile.ZipFile(output_path, 'r') as z:
         z.extractall(work_dir)
-
-    # ── 读取原始 XML ────────────────────────────────────────────────
     sheet_path = os.path.join(work_dir, 'xl', 'worksheets', 'sheet2.xml')
     with open(sheet_path, 'r', encoding='utf-8') as f:
         sheet_content = f.read()
-
     ss_path = os.path.join(work_dir, 'xl', 'sharedStrings.xml')
     with open(ss_path, 'r', encoding='utf-8') as f:
         ss_content = f.read()
-
-    # ── 追加新字符串到 sharedStrings ──────────────────────────────
     existing = re.findall(r'<si>(.*?)</si>', ss_content, re.DOTALL)
     exist_map = {}
     for i, m in enumerate(existing):
         txt = re.sub(r'<[^>]+>', '', m).strip()
         exist_map[txt] = i
-
     total_count = int(re.search(r'count="(\d+)"', ss_content).group(1))
     total_unique = int(re.search(r'uniqueCount="(\d+)"', ss_content).group(1))
-
     new_strs = []
-
     def get_idx(text):
         if text in exist_map:
             return exist_map[text]
         if text not in new_strs:
             new_strs.append(text)
         return len(existing) + new_strs.index(text)
-
     get_idx(item_code_19)
     get_idx(supplier_item_code)
     for s in steps:
@@ -441,7 +266,6 @@ def fill_template_surgical(output_path, steps, item_code_19, supplier_item_code)
             get_idx(s['remark'])
         get_idx('否')
         get_idx(q_val(s))
-
     for txt in new_strs:
         ss_content = ss_content.replace(
             '</sst>',
@@ -451,92 +275,49 @@ def fill_template_surgical(output_path, steps, item_code_19, supplier_item_code)
     new_unique = total_unique + sum(1 for t in new_strs if t not in exist_map)
     ss_content = re.sub(r'count="\d+"', f'count="{new_total}"', ss_content, count=1)
     ss_content = re.sub(r'uniqueCount="\d+"', f'uniqueCount="{new_unique}"', ss_content, count=1)
-
     all_si = re.findall(r'<si>(.*?)</si>', ss_content, re.DOTALL)
     str_map = {}
     for i, m in enumerate(all_si):
         txt = re.sub(r'<[^>]+>', '', m).strip()
         str_map[txt] = i
-
-    # ── 手术式替换 sheet2.xml ─────────────────────────────────────
-    # 策略：找到所有 <row r="N">...</row>，替换 row 10+ 的行内容
-    # 保留 row 1-9 完全原样（包括 hidden 属性）
-
     def replace_row_content(m):
         row_tag = m.group(0)
         rnum_match = re.search(r'<row r="(\d+)"', row_tag)
         if not rnum_match:
             return row_tag
         rnum = int(rnum_match.group(1))
-
-        # 保留 rows 1-9 原样
         if rnum <= 9:
             return row_tag
-
-        # rows 10+：找到对应的 step 数据
         step_idx = rnum - 10
         if step_idx >= len(steps):
-            # 超出 step 数量，删除该行（返回空）
             return ''
-
         s = steps[step_idx]
         seq = (step_idx + 1) * 10
-
-        # 提取原始 row 的属性（spans, ht, customHeight 等）
         row_attrs = re.search(r'<row r="\d+"(.*?)>', row_tag)
         attrs = row_attrs.group(1) if row_attrs else ''
-
-        # 生成 cell 内容
         cells_xml = ''
-
-        # D列（排序号，直接数值，无 t 属性）
         cells_xml += f'<c r="D{rnum}"{attrs}><v>{seq}</v></c>'
-
-        # F列（厂家物项编码，s="31" 与模板一致）
         cells_xml += f'<c r="F{rnum}" s="31" t="s"><v>{str_map[supplier_item_code]}</v></c>'
-
-        # H列（工序编号）
         cells_xml += f'<c r="H{rnum}" t="s"><v>{str_map[s["step"]]}</v></c>'
-
-        # I列（工序名称）
         cells_xml += f'<c r="I{rnum}" t="s"><v>{str_map[s["name"]]}</v></c>'
-
-        # K列（选点S）填 S列 WHR 值
         if s['whr_s']:
             cells_xml += f'<c r="K{rnum}" t="s"><v>{str_map[s["whr_s"]]}</v></c>'
-        # X列（选点C）填 C列 WHR 值
         if s.get('whr_c'):
             cells_xml += f'<c r="X{rnum}" t="s"><v>{str_map[s["whr_c"]]}</v></c>'
-
-        # M列（依据文件编号）
         if s['doc_no']:
             cells_xml += f'<c r="M{rnum}" t="s"><v>{str_map[s["doc_no"]]}</v></c>'
-
-        # P列（实物是否须有编号）
         cells_xml += f'<c r="P{rnum}" t="s"><v>{str_map["否"]}</v></c>'
-
-        # Q列（是否产生报告）
         cells_xml += f'<c r="Q{rnum}" t="s"><v>{str_map[q_val(s)]}</v></c>'
-
-        # R列（选点A1）
         if s['whr_a']:
             cells_xml += f'<c r="R{rnum}" t="s"><v>{str_map[s["whr_a"]]}</v></c>'
-
-        # AA列（备注）
         if s['remark']:
             cells_xml += f'<c r="AA{rnum}" t="s"><v>{str_map[s["remark"]]}</v></c>'
-
         return f'<row r="{rnum}"{attrs}>{cells_xml}</row>'
-
-    # 匹配所有 <row ...>...</row>
     sheet_content = re.sub(r'<row r="\d+".*?</row>', replace_row_content, sheet_content, flags=re.DOTALL)
-
     with open(sheet_path, 'w', encoding='utf-8') as f:
         f.write(sheet_content)
     with open(ss_path, 'w', encoding='utf-8') as f:
         f.write(ss_content)
-
-    # ── 重新打包 xlsx ──────────────────────────────────────────────
     if os.path.exists(output_path):
         os.remove(output_path)
     with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zout:
@@ -545,5 +326,67 @@ def fill_template_surgical(output_path, steps, item_code_19, supplier_item_code)
                 fpath = os.path.join(root, fname)
                 arcname = os.path.relpath(fpath, work_dir)
                 zout.write(fpath, arcname)
-
     shutil.rmtree(work_dir)
+
+# ─── Main batch loop ────────────────────────────────────────────────
+
+os.makedirs(OUT_DIR, exist_ok=True)
+
+results = []
+
+for info in PDFS:
+    pdf_path = info['path']
+    part_no = info['part_no']
+
+    print(f"\n{'='*60}")
+    print(f"处理：{part_no}")
+    print(f"路径：{pdf_path}")
+
+    fname = os.path.basename(pdf_path)
+    code19 = extract_code19_from_filename(fname)
+    if not code19:
+        code19 = extract_code19_from_pdf(pdf_path)
+    print(f"19位编码：{code19}")
+
+    # 提取厂家物项编码
+    supplier_code = extract_supplier_code_from_pdf(pdf_path)
+    print(f"厂家物项编码：{supplier_code or '(未找到)'}")
+    if not supplier_code:
+        supplier_code = code19  # fallback
+
+    steps = extract_qcp_with_whr(pdf_path)
+    print(f"识别工序数：{len(steps)}")
+    for s in steps[:5]:
+        print(f"  {s['step']} | {s['name']} | S={s['whr_s']} A={s['whr_a']} C={s.get('whr_c','')}")
+    if len(steps) > 5:
+        print(f"  ... 共{len(steps)}项")
+
+    output_name = f"{code19}_{part_no}_QCP导入数据.xlsx"
+    output_path = os.path.join(OUT_DIR, output_name)
+
+    try:
+        fill_template_surgical(output_path, steps, code19, supplier_code)
+        print(f"✅ 输出：{output_path}")
+        results.append({
+            'file': output_name,
+            'steps': len(steps),
+            'llm': False,
+            'supplier_code': supplier_code,
+            'note': ''
+        })
+    except Exception as e:
+        print(f"❌ 错误：{e}")
+        import traceback
+        traceback.print_exc()
+        results.append({
+            'file': output_name,
+            'steps': len(steps),
+            'llm': False,
+            'supplier_code': supplier_code,
+            'note': f'异常: {e}'
+        })
+
+print("\n\n" + "="*60)
+print("汇总：")
+for r in results:
+    print(f"  {r['file']} | 工序:{r['steps']} | LLM:否 | 厂家编码:{r['supplier_code']} {r['note']}")

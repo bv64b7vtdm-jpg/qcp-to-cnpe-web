@@ -1,0 +1,197 @@
+[
+  {
+    "step": "B1.0",
+    "name": "泵组装前制造先决条件检查",
+    "content": "（人、机、料、法、环） Manufacturing precondition check such as human resource, machines, material, method and environment before starting the manufacturing of the pumps before starting the welding for HP-piping and Assembly the pumps"
+  },
+  {
+    "step": "B1.1",
+    "name": "水压试验 1）",
+    "content": "Hydrostatic Test 1）"
+  },
+  {
+    "step": "B1.2",
+    "name": "待装零件清洗及标识核对",
+    "content": "Cleaning Parts to be assembled and Check the parts Markings"
+  },
+  {
+    "step": "B1.3",
+    "name": "泵组装和调整",
+    "content": "Pump Assembly & Adjusting"
+  },
+  {
+    "step": "B1.3.1",
+    "name": "转子动平衡检验试验",
+    "content": "Rotor Dynamic balancing test"
+  },
+  {
+    "step": "B1.3.1.1",
+    "name": "叶轮去重部位渗透检测（如",
+    "content": "需） PT test for removal positon of impeller after the rotor balancing test qualified（if needed）"
+  },
+  {
+    "step": "B1.3.2",
+    "name": "泵组装配",
+    "content": "Pump Set Assembly"
+  },
+  {
+    "step": "B1.3.3",
+    "name": "确认泵组装过程中未见异物",
+    "content": "Confirm no foreign staff was found during pump assembly"
+  },
+  {
+    "step": "B1.4",
+    "name": "质量控制计划关闭",
+    "content": "QCP Closing"
+  },
+  {
+    "step": "C1.0",
+    "name": "泵试验前先决条件检查",
+    "content": "Pre-condition Check before test"
+  },
+  {
+    "step": "C1.1",
+    "name": "性能试验",
+    "content": "Performance Test"
+  },
+  {
+    "step": "C1.1.1",
+    "name": "起停循环试验",
+    "content": "Start / Stops Test"
+  },
+  {
+    "step": "C1.1.2",
+    "name": "冷态性能试验",
+    "content": "Cold performance test"
+  },
+  {
+    "step": "C1.1.3",
+    "name": "热态性能试验",
+    "content": "Hot Performance test"
+  },
+  {
+    "step": "C1.1.4",
+    "name": "噪声检测",
+    "content": "Noise Examination"
+  },
+  {
+    "step": "C1.1.5",
+    "name": "热态运行试验",
+    "content": "Hot operating"
+  },
+  {
+    "step": "C1.1.6",
+    "name": "注入水断水试验",
+    "content": "Loss of injection water flow"
+  },
+  {
+    "step": "C1.1.7",
+    "name": "失顶油泵惰转试验",
+    "content": "Coast down test without damage and with the auxiliary oil lift system imperative"
+  },
+  {
+    "step": "C1.1.8",
+    "name": "冷却水断水试验",
+    "content": "Loss of cooling water"
+  },
+  {
+    "step": "C1.1.9",
+    "name": "失电试验(主泵停机-注入水",
+    "content": "和冷却水断水并停泵) Loss of power (loss of injection and cooling water with RCP off)"
+  },
+  {
+    "step": "C1.1.10",
+    "name": "主泵运行时注入水和冷却水",
+    "content": "同时断水试验 Loss of injection water and cooling water with the RCP operating"
+  },
+  {
+    "step": "C1.1.11",
+    "name": "振动和轴位移监测",
+    "content": "Vibration and shaft displacement"
+  },
+  {
+    "step": "C1.1.12",
+    "name": "高压冷却器二次侧压差监测",
+    "content": "HP-cooler shell side pressure- drop test"
+  },
+  {
+    "step": "C1.1.13",
+    "name": "压力脉动试验",
+    "content": "Pressure Pulsation"
+  },
+  {
+    "step": "C1.1.14",
+    "name": "高压泄露关闭试验",
+    "content": "High-pressure leak shutdown test"
+  },
+  {
+    "step": "C1.1.15",
+    "name": "下端停机密封泄漏试验",
+    "content": "Backseat leakage"
+  },
+  {
+    "step": "C1.2",
+    "name": "试验后拆解",
+    "content": "Strip after Pump Test"
+  },
+  {
+    "step": "C1.2.1",
+    "name": "解体检查",
+    "content": "Strip test"
+  },
+  {
+    "step": "C1.3",
+    "name": "清洗",
+    "content": "Cleaning"
+  },
+  {
+    "step": "C1.3.1",
+    "name": "清洁度检查",
+    "content": "Cleanliness Check"
+  },
+  {
+    "step": "C1.4",
+    "name": "质量控制计划关闭",
+    "content": "QCP Closing"
+  },
+  {
+    "step": "D1.0",
+    "name": "泵组部件复装",
+    "content": "Component Reassembly"
+  },
+  {
+    "step": "D1.1",
+    "name": "泵组装过程中防异物检查",
+    "content": "No foreign material check during pump assembly"
+  },
+  {
+    "step": "D1.2",
+    "name": "质量控制计划关闭",
+    "content": "QCP Closing"
+  },
+  {
+    "step": "E1.0",
+    "name": "最终检查（包含本体检查）",
+    "content": "Final Inspection （physical local inspection）"
+  },
+  {
+    "step": "E1.1",
+    "name": "包装及装箱检查",
+    "content": "Package and Packing Check"
+  },
+  {
+    "step": "E1.3",
+    "name": "工厂质量放行",
+    "content": "Release for Shipping"
+  },
+  {
+    "step": "E1.4",
+    "name": "发运",
+    "content": "Delivery"
+  },
+  {
+    "step": "E1.5",
+    "name": "质量控制计划关闭",
+    "content": "QCP Closing"
+  }
+]
