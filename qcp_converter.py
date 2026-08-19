@@ -553,6 +553,22 @@ def _fix_template_styles(tmpl_path):
         _sh.rmtree(work, ignore_errors=True)
 
 
+
+
+def _is_pump_casing_qcp(pdf_path):
+    """检查 PDF 是否是泵壳相关 QCP（按名称识别）"""
+    import pdfplumber
+    try:
+        with pdfplumber.open(pdf_path) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text() or ''
+                if '泵壳' in text:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
 # ============================================================
 # 便捷入口（高级封装）
 # ============================================================
@@ -577,9 +593,9 @@ def convert_qcp_to_cnpe(pdf_path, tmpl_path, item_code='1907RCP10101', supplier_
     # 泵壳及子件特殊规则（2026-08-19 陈老师反馈）：
     # 泵壳本体及所有泵壳相关子件（底脚/安全端/焊接见证件/母材见证件/焊材）
     # 共用零件号 101.01 → 物项标识码固定为 1907RCP10101
-    # 识别方法：item_code 为 19 位编码时，Z 段为 Z4x/Z5x/Z6x/Z7x → 强制覆盖
-    if len(item_code) >= 11 and item_code[8:11].startswith(('Z4', 'Z5', 'Z6', 'Z7')):
-        print(f'[info] 泵壳相关 QCP (Z段={item_code[8:11]}) → 强制使用 1907RCP10101')
+    # 识别方法：PDF 题目或任意页含"泵壳" → 强制覆盖（按名称）
+    if _is_pump_casing_qcp(pdf_path):
+        print(f'[info] 泵壳相关 QCP（按名称识别）→ 强制使用 1907RCP10101')
         item_code = '1907RCP10101'
 
     steps = parse_qcp_pdf(pdf_path, supplier_count=supplier_count)
