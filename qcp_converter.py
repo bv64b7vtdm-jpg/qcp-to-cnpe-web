@@ -573,6 +573,15 @@ def convert_qcp_to_cnpe(pdf_path, tmpl_path, item_code='1907RCP10101', supplier_
             tempfile.gettempdir(),
             f'qcp_cnpe_{os.path.basename(pdf_path).replace(".pdf","")}_{os.getpid()}.xlsx'
         )
+
+    # 泵壳及子件特殊规则（2026-08-19 陈老师反馈）：
+    # 泵壳本体及所有泵壳相关子件（底脚/安全端/焊接见证件/母材见证件/焊材）
+    # 共用零件号 101.01 → 物项标识码固定为 1907RCP10101
+    # 识别方法：item_code 为 19 位编码时，Z 段为 Z4x/Z5x/Z6x/Z7x → 强制覆盖
+    if len(item_code) >= 11 and item_code[8:11].startswith(('Z4', 'Z5', 'Z6', 'Z7')):
+        print(f'[info] 泵壳相关 QCP (Z段={item_code[8:11]}) → 强制使用 1907RCP10101')
+        item_code = '1907RCP10101'
+
     steps = parse_qcp_pdf(pdf_path, supplier_count=supplier_count)
     # 自动推断 supplier_count（如果未指定）
     if supplier_count is None:
