@@ -266,29 +266,11 @@ def parse_qcp_pdf(pdf_path, supplier_count=None):
                         'remark': remark if remark not in ('.', '') else '',
                         'raw_doc': raw_doc,
                     })
-    return _merge_subproc_docs(all_steps)
-
-
-def _merge_subproc_docs(steps):
-    import re
-    result = []
-    parent_idx = {}
-    for s in steps:
-        pn = s['proc_no']
-        if '.' in pn:
-            parent_pn = pn.split('.')[0]
-            if parent_pn in parent_idx:
-                sub_doc = strip_rev(s.get('raw_doc', '').strip())
-                if sub_doc:
-                    parent_idx[parent_pn].setdefault('sub_docs', []).append(sub_doc)
-        else:
-            parent_idx[pn] = s
-            result.append(s)
-    for p in result:
-        p.setdefault('sub_docs', [])
-    for p in result:
-        p['raw_doc'] = strip_rev(p.get('raw_doc', ''))
-    return result
+    # 2026-09-23 陈老师反馈:每个子工序单独成行(不做合并),所以直接 return
+    # 但 raw_doc 还要过 strip_rev 过滤 Rev 后缀(ZDKZ01 这种)
+    for s in all_steps:
+        s['raw_doc'] = strip_rev(s.get('raw_doc', ''))
+    return all_steps
 
 
 def strip_rev(text):
