@@ -95,15 +95,10 @@ def upload():
         pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
         file.save(pdf_path)
 
-        # 泵壳及子件特殊规则（2026-08-19 陈老师反馈）：
-        # 泵壳本体及所有泵壳相关子件（底脚/安全端/焊接见证件/母材见证件/焊材）
-        # 共用零件号 101.01 → 物项标识码固定为 1907RCP10101
-        # 识别方法：PDF 题目或任意页含"泵壳" → 强制覆盖（按名称）
-        if _is_pump_casing_qcp(pdf_path):
-            item_code_19 = '1907RCP10101'
-            app.logger.info(f'泵壳相关 QCP（按名称识别）→ 强制使用 1907RCP10101')
+        # 2026-09-23 陈老师反馈:删除泵壳强制覆盖规则
+        # 让 supplier_item_code(界面输入的厂家物项编号)总是生效
 
-        # 调用 v3.7 一站式转换
+        # 调用 v3.8 一站式转换
         template_path = os.path.join(
             os.path.dirname(os.path.abspath(__file__)),
             'templates',
@@ -114,16 +109,22 @@ def upload():
             os.remove(pdf_path)
             return jsonify({'error': 'Excel模板文件不存在'}), 500
 
-        output_filename = f"CNPE_转换_{item_code_19}.xlsx"
+        # 文件名 = 19位编码_零件号.xlsx(2026-09-23,不要 CNPE_ 前缀)
+        filename_parts = [item_code_19]
+        if part_no:
+            filename_parts.append(part_no)
+        output_filename = '_'.join(filename_parts) + '.xlsx'
         output_path = os.path.join(app.config['UPLOAD_FOLDER'], output_filename)
 
-        # v3.7 接口：convert_qcp_to_cnpe(pdf, tmpl, item_code, supplier_count=None, out_path=None)
+        # v3.8 接口:convert_qcp_to_cnpe(pdf, tmpl, item_code, supplier_count=None,
+        #                                out_path=None, supplier_item_code=None)
         from qcp_converter import convert_qcp_to_cnpe
         out_path, n_procedures, supplier_count = convert_qcp_to_cnpe(
             pdf_path=pdf_path,
             tmpl_path=template_path,
             item_code=item_code_19,
-            out_path=output_path
+            out_path=output_path,
+            supplier_item_code=supplier_item_code
         )
 
         os.remove(pdf_path)

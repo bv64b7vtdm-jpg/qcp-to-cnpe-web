@@ -157,13 +157,20 @@ def _detect_column_mapping(tbl, header_idx):
             remark_col = j
             break
 
+    # 作业依据文件列(2026-09-23)
+    doc_col = None
+    for j, c in enumerate(tbl[header_idx]):
+        if c and ('作业依据文件' in str(c) or 'ApplicableDocument' in str(c)):
+            doc_col = j
+            break
+
     return {
-        'a_col': a_col,         # None if not present (B 版)
+        'a_col': a_col,
         's_col': s_col,
         'c_col': c_col,
         'o_col': o_col,
         'remark_col': remark_col,
-        # 版本标识（仅供调试/报告使用）
+        'doc_col': doc_col,
         'version': 'B' if a_col is None else 'A',
     }
 
@@ -225,6 +232,7 @@ def parse_qcp_pdf(pdf_path, supplier_count=None):
                 o_col = col_map['o_col']
                 a_col = col_map['a_col']  # 可能为 None
                 remark_col = col_map['remark_col']
+                doc_col = col_map.get('doc_col')  # 作业依据文件列(2026-09-23 新增)
 
                 # 从 header_idx+2 起解析数据
                 for ri in range(header_idx + 2, len(tbl)):
@@ -246,6 +254,8 @@ def parse_qcp_pdf(pdf_path, supplier_count=None):
                     remark = _read_cell(row, remark_col) if remark_col is not None else ''
                     remark = re.sub(r'\n', ' ', remark)
 
+                    raw_doc = _read_cell(row, doc_col) if doc_col is not None else ''
+
                     all_steps.append({
                         'proc_no': proc_no,
                         'name': name,
@@ -253,9 +263,56 @@ def parse_qcp_pdf(pdf_path, supplier_count=None):
                         's_point': s_val if s_val in ('H', 'R', 'W') else '',
                         'c_point': c_val if c_val in ('H', 'R', 'W') else '',
                         'o_point': o_val if o_val in ('H', 'R', 'W') else '',
-                        'remark': remark if remark not in ('.', '') else ''
+                        'remark': remark if remark not in ('.', '') else '',
+                        'raw_doc': raw_doc,
                     })
-    return all_steps
+    return _merge_subproc_docs(all_steps)
+
+
+def _merge_subproc_docs(steps):
+    import re
+    result = []
+    parent_idx = {}
+    for s in steps:
+        pn = s['proc_no']
+        if '.' in pn:
+            parent_pn = pn.split('.')[0]
+            if parent_pn in parent_idx:
+                sub_doc = strip_rev(s.get('raw_doc', '').strip())
+                if sub_doc:
+                    parent_idx[parent_pn].setdefault('sub_docs', []).append(sub_doc)
+        else:
+            parent_idx[pn] = s
+            result.append(s)
+    for p in result:
+        p.setdefault('sub_docs', [])
+    for p in result:
+        p['raw_doc'] = strip_rev(p.get('raw_doc', ''))
+    return result
+
+
+def strip_rev(text):
+    import re
+    if not text: return text
+    def is_rev(tok):
+        t = tok.strip().rstrip(',.')
+        if not t or len(t) > 6 or len(t) < 2: return False
+        if not t[0].isupper(): return False
+        if not any(c.isdigit() for c in t): return False
+        if not re.match(r'^[A-Z][A-Z0-9.]*$', t): return False
+        return True
+    cleaned = []
+    for line in text.split('\n'):
+        line = line.strip()
+        if not line: continue
+        toks = re.split(r'[\s,]+', line)
+        if toks and is_rev(toks[-1]):
+            line = line.rsplit(toks[-1], 1)[0].rstrip(' ,')
+        if line: cleaned.append(line)
+    r = '\n'.join(cleaned)
+    r = re.sub(r',\s*,', ',', r)
+    r = re.sub(r'^,|,$', '', r)
+    return r
 
 
 def _auto_detect_supplier_count(steps, col_map):
@@ -329,6 +386,13 @@ def clean_steps_with_supplier_layers(steps, supplier_count=1):
         is_close = '质量计划关闭' in s['name'] or '计划关闭' in s['name']
         q_val = 'N' if (is_precheck or is_close) else ('Y' if has_sp else 'N')
 
+        doc_list = []
+        raw = s.get('raw_doc', '').strip()
+        if raw: doc_list.append(raw)
+        for sd in s.get('sub_docs', []):
+            if sd: doc_list.append(sd)
+        doc_combined = ','.join(doc_list)
+
         result.append({
             'proc_no': s['proc_no'],
             'name': s['name'],
@@ -339,7 +403,8 @@ def clean_steps_with_supplier_layers(steps, supplier_count=1):
             'a2_point': a2_display,
             'a3_point': a3_display,
             'q': q_val,
-            'remark': s.get('remark', '')
+            'remark': s.get('remark', ''),
+            'doc_combined': doc_combined,
         })
     return result
 
@@ -415,7 +480,7 @@ def delete_columns(sheet_path, cols_to_delete):
 # ============================================================
 # Excel 生成（0729 新模板）
 # ============================================================
-def make_xlsx_0729(tmpl_path, out_path, steps, item_code, supplier_count=1):
+def make_xlsx_0729(tmpl_path, out_path, steps, item_code, supplier_count=1, supplier_item_code=None):
     """
     按 0729 新模板生成 Excel，并按供应商数量真正删除 A2/A3 列
 
@@ -459,9 +524,14 @@ def make_xlsx_0729(tmpl_path, out_path, steps, item_code, supplier_count=1):
         row_num = 10 + i
         # C 列：排序号
         ws.cell(row=row_num, column=3, value=10 + i * 10)
-        # E 列：物项标识码
-        ws.cell(row=row_num, column=5, value=item_code)
-        # G 列：工序编号
+        # E 列:物项标识码(supplier_item_code 优先,fallback 到 item_code)
+        e_value = supplier_item_code if supplier_item_code else item_code
+        ws.cell(row=row_num, column=5, value=e_value)
+        # N 列:依据文件信息(陈老师 2026-09-23 反馈,PDF 作业依据文件列)
+        doc_val = step.get('doc_combined', '')
+        if doc_val:
+            ws.cell(row=row_num, column=14, value=doc_val)
+        # G 列:工序编号
         ws.cell(row=row_num, column=7, value=step['proc_no'])
         # H 列：工序名称
         ws.cell(row=row_num, column=8, value=step['name'])
@@ -573,7 +643,7 @@ def _is_pump_casing_qcp(pdf_path):
 # 便捷入口（高级封装）
 # ============================================================
 def convert_qcp_to_cnpe(pdf_path, tmpl_path, item_code='1907RCP10101', supplier_count=None,
-                       out_path=None):
+                       out_path=None, supplier_item_code=None):
     """
     一站式转换：PDF → Excel
 
@@ -590,11 +660,10 @@ def convert_qcp_to_cnpe(pdf_path, tmpl_path, item_code='1907RCP10101', supplier_
             f'qcp_cnpe_{os.path.basename(pdf_path).replace(".pdf","")}_{os.getpid()}.xlsx'
         )
 
-    # 泵壳及子件特殊规则（2026-08-19 陈老师反馈）：
+    # 2026-09-23 陈老师反馈:删除泵壳强制覆盖规则,supplier_item_code 总是生效
     # 泵壳本体及所有泵壳相关子件（底脚/安全端/焊接见证件/母材见证件/焊材）
     # 共用零件号 101.01 → 物项标识码固定为 1907RCP10101
     # 识别方法：PDF 题目或任意页含"泵壳" → 强制覆盖（按名称）
-    if _is_pump_casing_qcp(pdf_path):
         print(f'[info] 泵壳相关 QCP（按名称识别）→ 强制使用 1907RCP10101')
         item_code = '1907RCP10101'
 
@@ -604,7 +673,9 @@ def convert_qcp_to_cnpe(pdf_path, tmpl_path, item_code='1907RCP10101', supplier_
         col_map = get_column_map(pdf_path) or {}
         supplier_count = _auto_detect_supplier_count(steps, col_map)
     cleaned = clean_steps_with_supplier_layers(steps, supplier_count=supplier_count)
-    n = make_xlsx_0729(tmpl_path, out_path, cleaned, item_code, supplier_count=supplier_count)
+    n = make_xlsx_0729(tmpl_path, out_path, cleaned, item_code,
+                       supplier_count=supplier_count,
+                       supplier_item_code=supplier_item_code)
     return out_path, n, supplier_count
 
 
