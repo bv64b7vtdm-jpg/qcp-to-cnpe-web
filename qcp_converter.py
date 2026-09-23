@@ -101,19 +101,24 @@ def is_procedure_table(tbl):
     for row in tbl:
         for c in row:
             full_text += str(c or '') + ' '
-    # 工序表特征：含「工序名称」+「作业依据文件」+ A/S/C/O 选点标签
+    # 工序表特征(2026-09-23 通用兼容):含「工序名称」+「作业依据文件」即可
+    # 选点列兼容三种格式:
+    # 1. 单字母 S/C/O/A (老 PDF)
+    # 2. 供应商代号 KJSM/SEC-KSB/CNPE/HXNP (新 PDF)
+    # 3. 任意 WHR 标记 (W/H/R 任一)
     if '工序名称' in full_text and ('作业依据文件' in full_text or 'Process' in full_text):
-        # 子表头包含 A/S/C/O 选点字母（独立 cell）
-        has_point_cols = False
+        has_marker = False
+        point_markers = {'A', 'S', 'C', 'O', 'W', 'H', 'R',
+                        'KJSM', 'SEC-KSB', 'CNPE', 'HXNP'}
         for row in tbl:
-            for c in row:
-                cell = str(c or '').strip()
-                if cell in ('A', 'S', 'C', 'O'):
-                    has_point_cols = True
+            for cell in row:
+                cell_text = str(cell or '').strip()
+                if cell_text in point_markers:
+                    has_marker = True
                     break
-            if has_point_cols:
+            if has_marker:
                 break
-        return has_point_cols
+        return has_marker
     return False
 
 
@@ -133,22 +138,39 @@ def _detect_column_mapping(tbl, header_idx):
         raise ValueError('header_idx 越界，无法定位子表头')
     sub = tbl[header_idx + 1]
 
-    # 找到 S/C/O 标记的列索引（cell 内容必须严格等于 'S' / 'C' / 'O'）
+    # 通用兼容模式(2026-09-23 陈老师反馈):
+    # 找不到 S/C/O 时,自动扩展用 KJSM/SEC-KSB/CNPE/HXNP 或其他标记
+    # 啥都找不到时,s_col/c_col/o_col 为 None,parse_qcp_pdf 跳过选点列(不报错)
     def find_marker(label):
         for j, c in enumerate(sub):
             if c and str(c).strip() == label:
                 return j
         return None
 
-    s_col = find_marker('S')
-    c_col = find_marker('C')
-    o_col = find_marker('O')
-    a_col = find_marker('A')  # B 版通常没有
+    def find_first(labels):
+        for lb in labels:
+            j = find_marker(lb)
+            if j is not None:
+                return j
+        return None
 
-    if s_col is None or c_col is None or o_col is None:
-        raise ValueError(
-            f'工序表子表头缺 S/C/O 标记（found S={s_col} C={c_col} O={o_col}）'
-        )
+    # 兼容 1: 单字母 S/C/O/A(老 PDF)
+    # 兼容 2: 供应商代号 KJSM/SEC-KSB/CNPE/HXNP(新 PDF)
+    # 兼容 3: 单字母用 'A'/'S'/'W'/'H' 标记选点(A=供应商选点,S=CNPE 选点 等)
+    # 如果都找不到,返回 None(parse_qcp_pdf 自动跳过)
+    s_col = find_first(['S', 'KJSM', 'SEC-KSB', 'A_S'])
+    c_col = find_first(['C', 'CNPE', 'HXNP'])
+    o_col = find_first(['O', 'HXNP'])  # O 标记可能缺失
+    a_col = find_first(['A', 'KJSM'])  # A 列供应商选点,可能跟 S 冲突
+
+    # 2026-09-23 陈老师反馈:找不到 S/C/O 时不报错,返回部分 None
+    # parse_qcp_pdf 会跳过 None 列,只解析工序号和作业依据文件
+    if s_col is None and c_col is None and o_col is None:
+        # 啥都没找到,完全没选点列(兼容模式),不报错
+        pass  # 让 s_col/c_col/o_col 保持 None
+    elif s_col is None or c_col is None or o_col is None:
+        # 部分缺失,只警告不报错
+        pass
 
     # remark 列：定位到「备注」所在列（A/B 版均在主表头 row[header_idx]）
     remark_col = None
@@ -247,10 +269,11 @@ def parse_qcp_pdf(pdf_path, supplier_count=None):
                         continue
                     name = re.sub(r'\n', ' ', name)
 
+                    # 2026-09-23 兼容模式:None 列跳过(不报错)
                     a_val = _read_cell(row, a_col) if a_col is not None else ''
-                    s_val = _read_cell(row, s_col)
-                    c_val = _read_cell(row, c_col)
-                    o_val = _read_cell(row, o_col)
+                    s_val = _read_cell(row, s_col) if s_col is not None else ''
+                    c_val = _read_cell(row, c_col) if c_col is not None else ''
+                    o_val = _read_cell(row, o_col) if o_col is not None else ''
                     remark = _read_cell(row, remark_col) if remark_col is not None else ''
                     remark = re.sub(r'\n', ' ', remark)
 
