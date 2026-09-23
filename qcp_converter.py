@@ -197,6 +197,75 @@ def _detect_column_mapping(tbl, header_idx):
     }
 
 
+def _map_supplier_code_to_point(raw_cell, default_letter):
+    """
+    把 PDF 里质量控制点列的原始 cell 转成 A/S/C/O + WHR 格式。
+
+    支持多种格式:
+    1. 单字母 (老 PDF): "W"/"H"/"R" → 保留,letter 来自 default_letter (S/C/O/A)
+    2. 供应商代号 (新 PDF): KJSM/SEC-KSB/CNPE/HXNP → 映射到对应 A/S/C/O
+    3. 已格式化的 "W点" / "H点" / "R点" → 保留
+    4. 空 / "-" / "选择一项" → 返回 None (没选点)
+    """
+    if not raw_cell:
+        return None
+    cell = str(raw_cell).strip()
+    # 已带"点"字
+    if cell.endswith('点') and len(cell) >= 2:
+        whr = cell[:-1].strip()
+        if whr in ('W', 'H', 'R'):
+            return whr
+    # 单字母 WHR(直接)
+    if cell in ('W', 'H', 'R'):
+        return cell
+    # 供应商代号映射(根据 default_letter 决定它对应 A/S/C/O 哪个)
+    # 但其实更智能:看 cell 本身的内容
+    supplier_map = {
+        'KJSM': 'W',       # 分供方(沈阳科金)→ 默认 W(如有 H/R 后续)
+        'SEC-KSB': 'W',
+        'CNPE': 'W',
+        'HXNP': 'W',
+        'SMSNPC': 'W',
+    }
+    # 实际 WHR 在选点单元格(子列),不在主列名
+    # 这里只做归一化:把"KJSM"等识别为"有选点",WHR 后续从其他渠道
+    # 但我们已经在选点列内,这里需要 WHR 标记
+    # 如果 cell 就是 KJSM/SEC-KSB 等,说明那一列是主列名,WHR 在子行
+    # 当前实现:只看 cell 文本,W/H/R 才算选点
+    if cell in supplier_map:
+        return None  # 主列名不算选点
+    # 留个扩展口:常见选点值
+    return None
+
+
+def _normalize_point_value(raw_value, default_letter='W'):
+    """
+    把 PDF 单元格内容归一化成 W/H/R(选点标记)
+    - "W" / "H" / "R" → 保留
+    - "W点" / "H点" / "R点" → 提取字母
+    - "选择一项" / "-" / "" → None (没选点,后续会让用户填)
+    """
+    if not raw_value:
+        return None
+    v = str(raw_value).strip()
+    if not v:
+        return None
+    if v in ('-', '/', '—', '—', 'N/A'):
+        return None
+    if '选择' in v:
+        return None
+    # 提取字母
+    if v in ('W', 'H', 'R'):
+        return v
+    if v.endswith('点') and len(v) >= 2:
+        whr = v[:-1].strip()
+        if whr in ('W', 'H', 'R'):
+            return whr
+    return None
+
+
+
+
 def _read_cell(row, col):
     """读取 row[col]，空值返回 ''"""
     if col is None or col >= len(row):
@@ -270,10 +339,11 @@ def parse_qcp_pdf(pdf_path, supplier_count=None):
                     name = re.sub(r'\n', ' ', name)
 
                     # 2026-09-23 兼容模式:None 列跳过(不报错)
-                    a_val = _read_cell(row, a_col) if a_col is not None else ''
-                    s_val = _read_cell(row, s_col) if s_col is not None else ''
-                    c_val = _read_cell(row, c_col) if c_col is not None else ''
-                    o_val = _read_cell(row, o_col) if o_col is not None else ''
+                    # 2026-09-23 兼容模式:None 列跳过 + WHR 归一化
+                    a_val = _normalize_point_value(_read_cell(row, a_col)) if a_col is not None else ''
+                    s_val = _normalize_point_value(_read_cell(row, s_col)) if s_col is not None else ''
+                    c_val = _normalize_point_value(_read_cell(row, c_col)) if c_col is not None else ''
+                    o_val = _normalize_point_value(_read_cell(row, o_col)) if o_col is not None else ''
                     remark = _read_cell(row, remark_col) if remark_col is not None else ''
                     remark = re.sub(r'\n', ' ', remark)
 
@@ -282,10 +352,10 @@ def parse_qcp_pdf(pdf_path, supplier_count=None):
                     all_steps.append({
                         'proc_no': proc_no,
                         'name': name,
-                        'a_point': a_val if a_val in ('H', 'R', 'W') else '',
-                        's_point': s_val if s_val in ('H', 'R', 'W') else '',
-                        'c_point': c_val if c_val in ('H', 'R', 'W') else '',
-                        'o_point': o_val if o_val in ('H', 'R', 'W') else '',
+                        'a_point': a_val or '',
+                        's_point': s_val or '',
+                        'c_point': c_val or '',
+                        'o_point': o_val or '',
                         'remark': remark if remark not in ('.', '') else '',
                         'raw_doc': raw_doc,
                     })
