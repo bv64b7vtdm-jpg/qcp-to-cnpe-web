@@ -138,30 +138,35 @@ def _detect_column_mapping(tbl, header_idx):
         raise ValueError('header_idx 越界，无法定位子表头')
     sub = tbl[header_idx + 1]
 
-    # 通用兼容模式(2026-09-23 陈老师反馈):
-    # 找不到 S/C/O 时,自动扩展用 KJSM/SEC-KSB/CNPE/HXNP 或其他标记
-    # 啥都找不到时,s_col/c_col/o_col 为 None,parse_qcp_pdf 跳过选点列(不报错)
-    def find_marker(label):
-        for j, c in enumerate(sub):
-            if c and str(c).strip() == label:
-                return j
+    # 通用语义映射(2026-09-23 陈老师反馈,灵活扩展)
+    # 每个角色独立找列,支持多种 PDF 格式:
+    #   - 老 PDF: 单字母 S/C/O/A(列头是 质量控制点 S/C/O/A)
+    #   - 新 PDF: 供应商代号 KJSM/SEC-KSB/CNPE/HXNP(列头是 KJSM 等)
+    #   - 未来扩展: SMSNPC 等任何代号都能映射
+    #
+    # 角色语义(陈老师 9-23 反馈):
+    #   A (分供方): KJSM / 沈阳科金类
+    #   S (卖方): SEC-KSB / 上海电气凯士比类
+    #   C (买方): CNPE / 中国核电工程类
+    #   O (业主): HXNP / SMSNPC / 华能霞浦核电类
+    SUPPLIER_ROLE = {
+        'A': ['A', 'KJSM', '沈阳科金', 'SMS-KJSM'],
+        'S': ['S', 'SEC-KSB', '上海电气', 'SEC'],
+        'C': ['C', 'CNPE', '中国核电', 'CNEC'],
+        'O': ['O', 'HXNP', 'SMSNPC', '华能', '中核'],
+    }
+
+    def find_role(role):
+        for label in SUPPLIER_ROLE[role]:
+            for j, c in enumerate(sub):
+                if c and str(c).strip().upper() == label.upper():
+                    return j
         return None
 
-    def find_first(labels):
-        for lb in labels:
-            j = find_marker(lb)
-            if j is not None:
-                return j
-        return None
-
-    # 兼容 1: 单字母 S/C/O/A(老 PDF)
-    # 兼容 2: 供应商代号 KJSM/SEC-KSB/CNPE/HXNP(新 PDF)
-    # 兼容 3: 单字母用 'A'/'S'/'W'/'H' 标记选点(A=供应商选点,S=CNPE 选点 等)
-    # 如果都找不到,返回 None(parse_qcp_pdf 自动跳过)
-    s_col = find_first(['S', 'KJSM', 'SEC-KSB', 'A_S'])
-    c_col = find_first(['C', 'CNPE', 'HXNP'])
-    o_col = find_first(['O', 'HXNP'])  # O 标记可能缺失
-    a_col = find_first(['A', 'KJSM'])  # A 列供应商选点,可能跟 S 冲突
+    a_col = find_role('A')  # 分供方
+    s_col = find_role('S')  # 卖方
+    c_col = find_role('C')  # 买方
+    o_col = find_role('O')  # 业主
 
     # 2026-09-23 陈老师反馈:找不到 S/C/O 时不报错,返回部分 None
     # parse_qcp_pdf 会跳过 None 列,只解析工序号和作业依据文件
@@ -461,11 +466,28 @@ def clean_steps_with_supplier_layers(steps, supplier_count=1):
         is_close = '质量计划关闭' in s['name'] or '计划关闭' in s['name']
         q_val = 'N' if (is_precheck or is_close) else ('Y' if has_sp else 'N')
 
+        # 过滤"作业依据文件"列里的中文描述(开头是中文字符就视为描述)
+        # 比如"检查必须具备的工艺、设备及人员资格情况"不是文件编号
+        def is_doc_id(text):
+            if not text: return False
+            t = str(text).strip()
+            if not t: return False
+            # 开头是中文 → 描述,不是文件编号
+            first = t[0]
+            # 中文字符的 Unicode 范围
+            if '一' <= first <= '鿿': return False
+            # 含中文比例 > 50% → 描述
+            cn = sum(1 for c in t if '一' <= c <= '鿿')
+            if cn / max(len(t), 1) > 0.5: return False
+            return True
+
         doc_list = []
         raw = s.get('raw_doc', '').strip()
-        if raw: doc_list.append(raw)
+        if raw and is_doc_id(raw):
+            doc_list.append(raw)
         for sd in s.get('sub_docs', []):
-            if sd: doc_list.append(sd)
+            if sd and is_doc_id(sd):
+                doc_list.append(sd)
         doc_combined = ','.join(doc_list)
 
         result.append({
@@ -610,13 +632,15 @@ def make_xlsx_0729(tmpl_path, out_path, steps, item_code, supplier_count=1, supp
         ws.cell(row=row_num, column=7, value=step['proc_no'])
         # H 列：工序名称
         ws.cell(row=row_num, column=8, value=step['name'])
-        # J 列：供应商选点
+        # 选点列语义映射(2026-09-23 陈老师反馈):
+        #   J = 卖方选点 (SEC-KSB)  <- s_point
+        #   K = 买方选点 (CNPE)     <- c_point
+        #   L = 业主选点 (HXNP)     <- o_point
+        #   V = 分供方选点 (KJSM)   <- a1_point (旧 PDF 选点 A1)
         if step.get('s_point'):
             ws.cell(row=row_num, column=10, value=step['s_point'])
-        # K 列：cnpe选点
         if step.get('c_point'):
             ws.cell(row=row_num, column=11, value=step['c_point'])
-        # L 列：业主选点
         if step.get('o_point'):
             ws.cell(row=row_num, column=12, value=step['o_point'])
         # S 列：是否产生报告
@@ -643,13 +667,15 @@ def make_xlsx_0729(tmpl_path, out_path, steps, item_code, supplier_count=1, supp
     #   1 = 只填 A1（单供应商） → 删 T/U 两列（保留 V）
     #   2 = 填 A1+A2 → 删 T 一列
     #   3 = 填 A1+A2+A3 → 三列都保留
-    # 从右到左删（openpyxl 不会自动调整索引）：
-    if supplier_count < 3:
-        ws.delete_cols(20)  # 删 T 列（选点A3）
-    if supplier_count < 2:
-        ws.delete_cols(20)  # 删 U 列（选点A2，删 T 后变成第 20 列）
+    # 用 amount 参数一次删多个(2026-09-23 修复 delete_cols 多次调用导致 V 列被误删)
+    # 删 T+U(选点 A3/A2) = supplier_count < 2 时需要删(保留 V/A1)
+    # 删 T+U+V(A3/A2/A1) = supplier_count < 1 时需要全删
     if supplier_count < 1:
-        ws.delete_cols(20)  # 删 V 列（选点A1，删 T+U 后变成第 20 列）
+        ws.delete_cols(20, amount=3)  # 删 T+U+V(A3+A2+A1)
+    elif supplier_count < 2:
+        ws.delete_cols(20, amount=2)  # 删 T+U(A3+A2,保留 V/A1)
+    elif supplier_count < 3:
+        ws.delete_cols(20, amount=1)  # 删 T(A3,保留 U+A2+V/A1)
 
     # 5. 保存
     wb.save(out_path)
