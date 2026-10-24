@@ -57,6 +57,41 @@ def health():
     return jsonify({'status': 'ok'})
 
 
+def _build_item_code_19(part_no, pdf_path=None):
+    """物项标识码 = 项目前缀 + 'RCP' + 零件号的全部数字（六条格式硬规 #1）
+
+    2026-10-24 修（陈老师指出线上违约）：
+      旧实现 `f"1907RCP{part_no.replace('.', '')}"` 只去点不去横杠，
+      `68-3.91` → `1907RCP68-391`、`59-4.21` → `1907RCP59-421`，
+      物项标识码里带横杠，违反硬规 #1。
+      同时霞浦项目前缀 `19151RCP` 从未实现，一律落成三门的 `1907RCP`。
+
+    硬规 #1 口径：`411.21`→`1907RCP41121`；`68-3.91`→`1907RCP68391`；
+                  `59-4.21`→`1907RCP59421`；`662.920`→`1907RCP662920`
+    项目前缀：三门 `1907RCP` / 霞浦 `19151RCP`（按 PDF 文本或文件名识别）
+    """
+    digits = re.sub(r'[^0-9]', '', str(part_no or ''))
+    if not digits:
+        return None
+
+    prefix = '1907RCP'
+    probe = os.path.basename(pdf_path or '')
+    if pdf_path and os.path.exists(pdf_path):
+        try:
+            with pdfplumber.open(pdf_path) as pdf:
+                probe += ''.join(
+                    (pdf.pages[i].extract_text() or '')
+                    for i in range(min(3, len(pdf.pages)))
+                )
+        except Exception:
+            pass  # 读不到就只用文件名判断
+
+    up = probe.upper()
+    if '霞浦' in probe or 'XIAPU' in up or 'HPX' in up:
+        prefix = '19151RCP'
+    return prefix + digits
+
+
 @app.route('/upload', methods=['POST'])
 def upload():
     try:
@@ -79,14 +114,12 @@ def upload():
                                 f"{uuid.uuid4().hex}_{secure_filename(file.filename)}")
         file.save(pdf_path)
 
-        # 19位编码：优先用用户输入，其次从 part_no 动态计算（v2.0 修复）
+        # 19位编码：优先用用户输入，其次按硬规 #1 从 part_no 推导（2026-10-24 修）
         if item_code_19_input:
             item_code_19 = item_code_19_input
-        elif part_no:
-            # 公式：1907RCP + 零件号去小数点
-            item_code_19 = f"1907RCP{part_no.replace('.', '')}"
         else:
-            item_code_19 = "1907RCP10101"  # 默认值，实际场景下应该报错
+            # 推导不出（零件号为空）才兜底；正常不该走到这里
+            item_code_19 = _build_item_code_19(part_no, pdf_path) or "1907RCP10101"
 
 
         # 调用 v3.7 一站式转换
